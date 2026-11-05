@@ -2,14 +2,15 @@
 
 目标：在 iPhone 15 Pro Max / iOS 26.6.1 上验证第三方键盘安装、插入文字和免费签名续期。
 
-**这是键盘实验版，不是已完成的语音输入产品。** v0.4.0 支持左滑循环切换语音页 → EN → 拼音 → 语音页，右滑反向切换，也可顶部点选。大麦克风按钮接入局域网真实语音实验；先在主 App 开启麦克风会话，再回键盘点击开始、停止和插入。另有独立“演示”按钮插入测试文字。EN 支持大小写、数字和标点；“拼”是基础离线全拼输入与候选选字。Return 在有待选拼音时先上屏，否则换行，不模拟发送消息。
+v0.4.1 是零年费侧载实验版，支持语音 / EN / 拼音连续滑动与顶部点选。中英文四行按键位置一致，三页 Return 下沿对齐，空闲界面去除常驻操作提示。主 App 开启限时麦克风会话后，可在键盘开始、停止录音并插入电脑识别结果。拼音支持全拼词组组合、末音节补全和分段选字；删除键支持长按加速。Return 有待选拼音时先上屏，否则换行。
 
 ## 当前功能
 
 - 原生 iOS 主 App＋键盘扩展，iOS 17+，不需要 App Groups。
 - 类似参考截图的深色语音键盘布局，使用独立名称和系统图标。
-- 中文演示输入、英文大小写、数字标点、基础离线全拼候选、删除、空格、Return、地球键。
-- 拼音词库约 3.1 万字词，不支持简拼、滑行打字、上下文智能联想或个人词频学习；v 代替 ü。候选栏可横向滚动。
+- 英文大小写、数字标点、离线全拼组合、删除、空格、Return、地球键。
+- 拼音词库约 3.1 万字词，最多保留 64 个拼音字母，提供最多 40 项候选。wom 可提供我们、我妈等组合，nihaom 可组合你好吗；长句可分段选字。候选栏横向滚动。
+- 简拼、语境模型、个人词频学习和展开候选网格仍待后续开发；当前排序由公共词库和组合规则决定。
 - 主 App 内置测试文本区、启用键盘说明。
 - 可选的局域网文字纠错测试：调用自己电脑现有的 CapsWriter 热词与规则源码，响应显示词库和源码版本。
 - 无广告、统计、收费 API；基本键盘不需要“允许完全访问”。
@@ -19,7 +20,7 @@
 详细步骤见 [docs/INSTALL.zh-CN.md](docs/INSTALL.zh-CN.md)。
 
 1. 在 Actions 下载 `CapsWriterLab-iPhone` 构建产物并解压。
-2. 把 `CapsWriterLab-0.4.0-unsigned.ipa` 拖入官方下载的 Sideloadly。
+2. 把 `CapsWriterLab-0.4.1-unsigned.ipa` 拖入官方下载的 Sideloadly。
 3. 使用自己的免费 Apple 账号在本地签名。**保留键盘扩展，不要移除 PlugIns。**
 4. iPhone 信任电脑、启用开发者模式、按提示信任开发者。
 5. 设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → CapsWriter Lab。
@@ -70,3 +71,4 @@ python -B -m unittest discover -s bridge -p 'test_*.py' -v
 - [Apple 第三方键盘权限](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard)
 - [GitHub 标准运行器](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 - [Sideloadly 官方 FAQ](https://sideloadly.io/faq)
+

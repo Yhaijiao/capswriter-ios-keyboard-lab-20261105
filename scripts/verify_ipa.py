@@ -5,7 +5,7 @@ import sys
 import zipfile
 
 
-def verify(path):
+def verify(path, expected_version=None):
     with zipfile.ZipFile(path) as package:
         base = 'Payload/CapsWriterLab.app/'
         app = plistlib.loads(package.read(base + 'Info.plist'))
@@ -21,8 +21,9 @@ def verify(path):
         assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         if any(name.endswith('pinyin-lexicon.json') for name in package.namelist()):
-            assert app.get('CFBundleShortVersionString') == '0.4.0', 'Unexpected app version'
-            assert extension.get('CFBundleShortVersionString') == '0.4.0', 'Unexpected keyboard version'
+            assert app.get('CFBundleShortVersionString') == extension.get('CFBundleShortVersionString'), 'Mismatched versions'
+            if expected_version is not None:
+                assert app.get('CFBundleShortVersionString') == expected_version, 'Unexpected app version'
             assert app.get('NSMicrophoneUsageDescription')
             assert 'audio' in app.get('UIBackgroundModes', [])
             for bundle in (base, extbase):
@@ -39,4 +40,4 @@ def verify(path):
 
 
 if __name__ == '__main__':
-    print(json.dumps(verify(sys.argv[1]), ensure_ascii=False, indent=2))
+    print(json.dumps(verify(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None), ensure_ascii=False, indent=2))
