@@ -17,7 +17,7 @@ final class KeyboardSmokeTests: XCTestCase {
         settings.launch()
         findAndTap(settings.staticTexts["General"].firstMatch, in: settings)
         findAndTap(settings.staticTexts["Keyboard"].firstMatch, in: settings)
-        findAndTap(settings.staticTexts["Keyboards"].firstMatch, in: settings)
+        findAndTap(settings.cells["KEYBOARDS"].firstMatch, in: settings)
         let add = settings.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Add New Keyboard")).firstMatch
         findAndTap(add, in: settings)
         findAndTap(settings.staticTexts["CapsWriter Lab"].firstMatch, in: settings)

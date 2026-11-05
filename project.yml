@@ -27,6 +27,8 @@ targets:
       path: ios/App/Info.plist
       properties:
         CFBundleDisplayName: CapsWriter Lab
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -53,6 +55,8 @@ targets:
       path: ios/Keyboard/Info.plist
       properties:
         CFBundleDisplayName: CapsWriter Lab
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSLocalNetworkUsageDescription: 从你自己的电脑获取热词版本和纠错结果。
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
