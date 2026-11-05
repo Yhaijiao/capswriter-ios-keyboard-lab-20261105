@@ -27,6 +27,7 @@ final class KeyboardSmokeTests: XCTestCase {
         findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
         let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
         findAndTap(thirdParty, in: settings)
+        settings.terminate()
 
         let app = XCUIApplication()
         app.launch()
@@ -34,12 +35,15 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["清空测试区"].firstMatch.tap()
         editor.tap()
+        dismissSystemTypingIntroduction(in: app, wait: true)
         let testButton = app.buttons["keyboard-test-button"]
         for _ in 0..<6 {
             if testButton.exists { break }
+            dismissSystemTypingIntroduction(in: app, wait: false)
             let next = app.buttons["Next keyboard"].firstMatch
             XCTAssertTrue(next.waitForExistence(timeout: 5), app.debugDescription)
             next.tap()
+            if testButton.waitForExistence(timeout: 3) { break }
         }
         XCTAssertTrue(testButton.waitForExistence(timeout: 10), app.debugDescription)
         testButton.tap()
@@ -91,5 +95,15 @@ final class KeyboardSmokeTests: XCTestCase {
     private func attach(_ app: XCUIApplication, name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+    private func dismissSystemTypingIntroduction(in app: XCUIApplication, wait: Bool) {
+        let introduction = app.staticTexts.matching(NSPredicate(format:
+            "label BEGINSWITH %@", "Speed up your typing by sliding your finger")).firstMatch
+        let visible = wait ? introduction.waitForExistence(timeout: 3) : introduction.exists
+        if visible {
+            let proceed = app.buttons["Continue"].firstMatch
+            XCTAssertTrue(proceed.waitForExistence(timeout: 3))
+            proceed.tap()
+        }
     }
 }

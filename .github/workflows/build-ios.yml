@@ -5,6 +5,9 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: capswriter-ios-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: macos-15-intel
