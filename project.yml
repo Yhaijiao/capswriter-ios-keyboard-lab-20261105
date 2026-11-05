@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: '5.0'
     TARGETED_DEVICE_FAMILY: '1'
-    MARKETING_VERSION: '0.4.1'
-    CURRENT_PROJECT_VERSION: '7'
+    MARKETING_VERSION: '0.4.2'
+    CURRENT_PROJECT_VERSION: '8'
     CODE_SIGNING_ALLOWED: NO
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
@@ -74,6 +74,21 @@ targets:
             PrefersRightToLeft: false
             PrimaryLanguage: zh-Hans
             RequestsOpenAccess: true
+  KeyboardLayoutTests:
+    type: bundle.unit-testing
+    platform: iOS
+    sources:
+      - path: ios/LayoutTests
+      - path: ios/Keyboard
+      - path: ios/Shared
+    dependencies:
+      - target: CapsWriterLab
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.capswriterlab.keyboard.layouttests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/CapsWriterLab.app/CapsWriterLab
+        BUNDLE_LOADER: $(TEST_HOST)
   KeyboardSmokeTests:
     type: bundle.ui-testing
     platform: iOS
@@ -97,6 +112,7 @@ schemes:
     test:
       config: Debug
       targets:
+        - name: KeyboardLayoutTests
         - name: KeyboardSmokeTests
     archive:
       config: Release

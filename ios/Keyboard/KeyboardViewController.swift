@@ -343,6 +343,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func renderLetters(mode: Mode, content: UIStackView) {
         let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+="] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
         var letterWidth: NSLayoutDimension?
+        var sizingConstraints: [NSLayoutConstraint] = []
         for (index, line) in layouts.enumerated() {
             var buttons: [UIView] = []
             var shiftButton: UIButton?
@@ -360,20 +361,23 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 let title = !symbols && mode == .english && shifted ? String(letter).uppercased() : String(letter)
                 let button = key(title) { [weak self] in self?.input(title) }
                 if index == 0 && letterWidth == nil { letterWidth = button.widthAnchor }
-                if !symbols && index > 0, let width = letterWidth { button.widthAnchor.constraint(equalTo: width).isActive = true }
+                if !symbols && index > 0, let width = letterWidth { sizingConstraints.append(button.widthAnchor.constraint(equalTo: width)) }
                 button.accessibilityIdentifier = "key-" + title; buttons.append(button)
             }
             if index == 2 {
                 let delete = deleteKey()
-                if let shift = shiftButton { delete.widthAnchor.constraint(equalTo: shift.widthAnchor).isActive = true }
+                if let shift = shiftButton { sizingConstraints.append(delete.widthAnchor.constraint(equalTo: shift.widthAnchor)) }
                 buttons.append(delete)
             }
             if !symbols && index == 1 {
                 let left = UIView(), right = UIView()
-                left.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
+                sizingConstraints.append(left.widthAnchor.constraint(equalTo: right.widthAnchor))
                 content.addArrangedSubview(row([left] + buttons + [right], equal: false))
             } else { content.addArrangedSubview(row(buttons, equal: symbols || index == 0)) }
         }
+        // Cross-view constraints require a shared ancestor. All rows must be
+        // attached to this page before any inter-key sizing is activated.
+        NSLayoutConstraint.activate(sizingConstraints)
         let number = key(symbols ? "ABC" : "123") { [weak self] in
             guard let self = self else { return }; self.commitComposition(); self.symbols.toggle(); self.render()
         }

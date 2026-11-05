@@ -29,7 +29,7 @@ def verify(path, expected_version=None):
             for bundle in (base, extbase):
                 lexicon = json.loads(package.read(bundle + 'pinyin-lexicon.json'))
                 assert len(lexicon) >= 17000 and lexicon['nihao'][0] == '你好'
-                if app.get('CFBundleShortVersionString') == '0.4.1':
+                if tuple(map(int, app['CFBundleShortVersionString'].split('.'))) >= (0, 4, 1):
                     costs = json.loads(package.read(bundle + 'pinyin-costs.json'))
                     assert len(costs) >= 17000 and costs['women'][0] > 0
                     assert all(len(costs[key]) == len(words) for key, words in lexicon.items())
