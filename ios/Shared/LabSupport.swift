@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.2.0"
+    static let version = "0.3.0"
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
     static let background = UIColor(red: 0.075, green: 0.075, blue: 0.085, alpha: 1)
@@ -39,53 +39,71 @@ struct BridgeReply: Decodable {
     var terms: Int?
     var text: String?
     var mode: String?
+    var id: String?
+    var state: String?
+    var error: String?
+    var voice_enabled: Bool?
+    var agent_ready: Bool?
+    var asr_ready: Bool?
 }
 
 enum BridgeError: LocalizedError {
-    case invalidAddress, invalidToken, server(Int), invalidReply
+    case invalidAddress, invalidToken, server(Int), invalidReply, message(String)
     var errorDescription: String? {
         switch self {
         case .invalidAddress: return "请输入局域网地址，例如 http://192.168.1.20:8765"
         case .invalidToken: return "请输入电脑端显示的配对码"
         case .server(let code): return "电脑服务返回 HTTP \(code)，请检查配对码和服务状态"
         case .invalidReply: return "电脑服务的响应格式不正确"
+        case .message(let text): return text
         }
     }
 }
 
 final class BridgeClient {
+    private static let session = URLSession(configuration: .ephemeral)
     static func request(address: String, token: String, text: String? = nil,
                         completion: @escaping (Result<BridgeReply, Error>) -> Void) {
+        call(address: address, token: token, path: text == nil ? "/v1/status" : "/v1/correct",
+             value: text.map { ["text": $0] }, completion: completion)
+    }
+
+    @discardableResult
+    static func call(address: String, token: String, path: String, value: [String: Any]? = nil,
+                     jobID: String? = nil, timeout: TimeInterval = 10,
+                     completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask? {
         // This experimental bridge is deliberately LAN-only; no arbitrary internet destinations.
         guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme == "http", parts.user == nil, parts.password == nil,
               let host = parts.host, isLocal(host),
-              var urlParts = URLComponents(string: address) else {
-            completion(.failure(BridgeError.invalidAddress)); return
+              var urlParts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            completion(.failure(BridgeError.invalidAddress)); return nil
         }
-        guard !token.isEmpty else { completion(.failure(BridgeError.invalidToken)); return }
-        urlParts.path = text == nil ? "/v1/status" : "/v1/correct"
+        guard !token.isEmpty else { completion(.failure(BridgeError.invalidToken)); return nil }
+        urlParts.path = path
         urlParts.query = nil; urlParts.fragment = nil
-        guard let url = urlParts.url else { completion(.failure(BridgeError.invalidAddress)); return }
-        var request = URLRequest(url: url, timeoutInterval: 15)
+        if let jobID = jobID { urlParts.queryItems = [URLQueryItem(name: "id", value: jobID)] }
+        guard let url = urlParts.url else { completion(.failure(BridgeError.invalidAddress)); return nil }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let text = text {
+        if let value = value {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+            request.httpBody = try? JSONSerialization.data(withJSONObject: value)
         }
-        let session = URLSession(configuration: .ephemeral)
-        session.dataTask(with: request) { data, response, error in
+        let task = session.dataTask(with: request) { data, response, error in
             let result: Result<BridgeReply, Error>
             if let error = error { result = .failure(error) }
             else if let response = response as? HTTPURLResponse, response.statusCode != 200 {
-                result = .failure(BridgeError.server(response.statusCode))
+                if let data = data, let reply = try? JSONDecoder().decode(BridgeReply.self, from: data), let message = reply.error {
+                    result = .failure(BridgeError.message(message))
+                } else { result = .failure(BridgeError.server(response.statusCode)) }
             } else if let data = data, let reply = try? JSONDecoder().decode(BridgeReply.self, from: data) {
                 result = .success(reply)
             } else { result = .failure(BridgeError.invalidReply) }
-            session.finishTasksAndInvalidate()
             DispatchQueue.main.async { completion(result) }
-        }.resume()
+        }
+        task.resume(); return task
     }
 
     static func isLocal(_ host: String) -> Bool {

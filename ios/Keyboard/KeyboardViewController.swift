@@ -15,6 +15,28 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     private weak var compositionLabel: UILabel?
     private var previewedText: String?
     private var bridgeRequestID = UUID()
+    private var voiceID: String?
+    private var voiceState = "idle"
+    private var voiceText = ""
+    private var voiceMessage = "Tap to speak · 点击开始说话"
+    private var voiceTimer: Timer?
+    private var voiceBusy = false
+    private var voicePolling = false
+    private var voiceRevision = UUID()
+    private weak var voiceHint: UILabel?
+    private weak var voiceButton: UIButton?
+    private var voiceStarted = Date.distantPast
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        voiceTimer?.invalidate(); voiceTimer = nil
+        if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
+        if ["pending", "recording"].contains(voiceState) { cancelVoice() }
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -52,6 +74,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     }
     private func changeMode(_ next: Mode) {
         if mode == .pinyin && next != .pinyin { commitComposition() }
+        if mode == .voice && next != .voice && ["pending", "recording"].contains(voiceState) { cancelVoice() }
         mode = next; shifted = false; symbols = false; render()
     }
     private func row(_ views: [UIView], equal: Bool = true) -> UIStackView {
@@ -82,7 +105,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
         globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         globe.widthAnchor.constraint(equalToConstant: 45).isActive = true; self.globe = globe
-        let note = Lab.label(mode == .voice ? "实验版 · 不录音 · 左滑切换 EN / 拼" : "左滑切换：语音 → EN → 拼 → 语音", size: 10, color: Lab.muted)
+        let note = Lab.label(mode == .voice ? "手机录音 · 自己的电脑识别 · 左滑 EN / 拼" : "左滑切换：语音 → EN → 拼 → 语音", size: 10, color: Lab.muted)
         note.textAlignment = .center; self.feedback = note
         let bridge = key("", symbol: "network") { [weak self] in self?.showBridge() }
         bridge.accessibilityLabel = "电脑热词连接设置"
@@ -92,29 +115,132 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     private func renderVoice() {
         let spacer = UIView(); spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
         content.addArrangedSubview(spacer)
-        let hint = Lab.label("Tap to test · 点击测试输入", size: 17, color: Lab.muted)
+        let hint = Lab.label(voiceMessage, size: 14, color: Lab.muted)
+        hint.numberOfLines = 2
         hint.textAlignment = .center; content.addArrangedSubview(hint)
-        let mic = Lab.button("", symbol: "mic.fill") { [weak self] in
-            self?.textDocumentProxy.insertText(Lab.chineseSample)
-            self?.feedback?.text = "已插入测试文字 · 本版本不录音"
-        }
+        voiceHint = hint
+        let mic = Lab.button("", symbol: "mic.fill") { [weak self] in self?.tapVoice() }
         mic.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
         mic.configuration?.baseForegroundColor = .black
         mic.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 35)
-        mic.accessibilityLabel = "插入测试文字。本版本不录音"
-        mic.accessibilityIdentifier = "keyboard-test-button"
+        mic.accessibilityIdentifier = "keyboard-voice-button"
         mic.widthAnchor.constraint(equalToConstant: 152).isActive = true
         mic.heightAnchor.constraint(equalToConstant: 65).isActive = true
+        voiceButton = mic; updateVoice()
         let micRow = row([UIView(), mic, UIView()], equal: false); micRow.distribution = .equalCentering
         content.addArrangedSubview(micRow)
         let delete = key("", symbol: "delete.left") { [weak self] in self?.deleteCharacter() }
         delete.accessibilityLabel = "删除一个字符"
         content.addArrangedSubview(row([key("space") { [weak self] in self?.space() }, returnKey(), delete]))
         content.addArrangedSubview(row([
-            key("，") { [weak self] in self?.input("，") },
+            demoKey(),
             key("。") { [weak self] in self?.input("。") },
             key("@") { [weak self] in self?.input("@") }
         ]))
+    }
+    private func demoKey() -> UIButton {
+        let button = key("演示") { [weak self] in self?.input(Lab.chineseSample) }
+        button.accessibilityIdentifier = "keyboard-test-button"
+        button.accessibilityLabel = "插入演示文字，不录音"
+        return button
+    }
+
+    private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,
+                           completion: @escaping (Result<BridgeReply, Error>) -> Void) {
+        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
+                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+                          path: path, value: value, jobID: jobID, completion: completion)
+    }
+    private func tapVoice() {
+        guard hasFullAccess else { voiceMessage = "先在键盘设置允许完全访问，再在主 App 开启语音会话。"; updateVoice(); return }
+        guard !voiceBusy else { return }
+        if voiceState == "done" {
+            guard !voiceText.isEmpty else { resetVoice("没有识别到文字，请重试。"); return }
+            textDocumentProxy.insertText(voiceText)
+            if let id = voiceID { voiceCall("/v1/voice/consume", value: ["id": id]) { _ in } }
+            resetVoice("已插入 · 点击麦克风录下一段"); return
+        }
+        if voiceState == "recording", let id = voiceID {
+            voiceRevision = UUID(); let revision = voiceRevision; voicePolling = false
+            voiceBusy = true; voiceMessage = "正在结束录音…"; updateVoice()
+            voiceCall("/v1/voice/stop", value: ["id": id]) { [weak self] result in
+                guard let self = self, self.voiceID == id, self.voiceRevision == revision else { return }
+                self.voiceBusy = false; self.handleVoice(result)
+            }
+            return
+        }
+        guard !["pending", "stopping", "processing"].contains(voiceState) else { return }
+        voiceRevision = UUID(); let revision = voiceRevision
+        voiceBusy = true; voiceMessage = "正在连接语音会话…"; updateVoice()
+        voiceCall("/v1/voice/start", value: [:]) { [weak self] result in
+            guard let self = self else { return }
+            guard self.voiceRevision == revision else {
+                if case .success(let reply) = result, let id = reply.id {
+                    self.voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in }
+                }
+                return
+            }
+            self.voiceBusy = false
+            if case .success(let reply) = result {
+                self.voiceID = reply.id; self.voiceStarted = Date(); self.scheduleVoicePoll()
+            }
+            self.handleVoice(result)
+        }
+    }
+    private func scheduleVoicePoll() {
+        voiceTimer?.invalidate()
+        let timer = Timer(timeInterval: .45, repeats: true) { [weak self] _ in self?.pollVoice() }
+        voiceTimer = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+    private func pollVoice() {
+        guard !voiceBusy, !voicePolling, let id = voiceID else { return }
+        if Date().timeIntervalSince(voiceStarted) > 210 { cancelVoice(); resetVoice("语音任务超时，请重试。"); return }
+        voicePolling = true; let revision = voiceRevision
+        voiceCall("/v1/voice/result", jobID: id) { [weak self] result in
+            guard let self = self, self.voiceID == id, self.voiceRevision == revision else { return }
+            self.voicePolling = false; self.handleVoice(result)
+        }
+    }
+    private func handleVoice(_ result: Result<BridgeReply, Error>) {
+        switch result {
+        case .failure(let error):
+            cancelVoice(); resetVoice(error.localizedDescription)
+        case .success(let reply):
+            voiceState = reply.state ?? "idle"
+            switch voiceState {
+            case "pending": voiceMessage = "正在启动手机录音，请稍候…"
+            case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 60 秒）"
+            case "stopping", "processing": voiceMessage = "正在电脑识别并应用当前热词…"
+            case "done":
+                voiceTimer?.invalidate(); voiceTimer = nil
+                voiceText = reply.text ?? ""
+                voiceMessage = voiceText.isEmpty ? "没有识别到文字，点击重试。" : voiceText
+                if voiceText.isEmpty { resetVoice(voiceMessage) }
+            case "error", "cancelled", "consumed": resetVoice(reply.error ?? "请重新开始录音。")
+            default: break
+            }
+            updateVoice()
+        }
+    }
+    private func updateVoice() {
+        voiceHint?.text = voiceMessage
+        let recording = voiceState == "recording"
+        voiceButton?.configuration?.title = recording ? "停止" : (voiceState == "done" ? "插入文字" : "")
+        voiceButton?.configuration?.image = UIImage(systemName: recording ? "stop.fill" : (voiceState == "done" ? "text.badge.plus" : "mic.fill"))
+        voiceButton?.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: recording || voiceState == "done" ? 22 : 35)
+        voiceButton?.accessibilityLabel = recording ? "停止录音" : (voiceState == "done" ? "插入识别文字" : "开始真实语音输入")
+        // Polling requests don't disable the stop button, so a tap is never silently lost.
+        voiceButton?.isEnabled = !voiceBusy && !["pending", "stopping", "processing"].contains(voiceState)
+    }
+    private func resetVoice(_ message: String) {
+        voiceTimer?.invalidate(); voiceTimer = nil
+        voiceID = nil; voiceText = ""; voiceState = "idle"; voiceBusy = false
+        voiceRevision = UUID(); voicePolling = false
+        voiceMessage = message; updateVoice()
+    }
+    private func cancelVoice() {
+        if let id = voiceID { voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in } }
+        resetVoice("录音已取消 · 点击重新开始")
     }
     private func renderLetters() {
         if mode == .pinyin {

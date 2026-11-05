@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: '5.0'
     TARGETED_DEVICE_FAMILY: '1'
-    MARKETING_VERSION: '0.2.0'
-    CURRENT_PROJECT_VERSION: '3'
+    MARKETING_VERSION: '0.3.0'
+    CURRENT_PROJECT_VERSION: '4'
     CODE_SIGNING_ALLOWED: NO
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
@@ -30,6 +30,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: 在你主动开启的限时语音会话中采集声音，将选定片段交给自己的电脑识别。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSLocalNetworkUsageDescription: 连接你自己的电脑，获取热词版本并测试同一套纠错算法。

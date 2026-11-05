@@ -21,8 +21,10 @@ def verify(path):
         assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         if any(name.endswith('pinyin-lexicon.json') for name in package.namelist()):
-            assert app.get('CFBundleShortVersionString') == '0.2.0', 'Unexpected app version'
-            assert extension.get('CFBundleShortVersionString') == '0.2.0', 'Unexpected keyboard version'
+            assert app.get('CFBundleShortVersionString') == '0.3.0', 'Unexpected app version'
+            assert extension.get('CFBundleShortVersionString') == '0.3.0', 'Unexpected keyboard version'
+            assert app.get('NSMicrophoneUsageDescription')
+            assert 'audio' in app.get('UIBackgroundModes', [])
             for bundle in (base, extbase):
                 lexicon = json.loads(package.read(bundle + 'pinyin-lexicon.json'))
                 assert len(lexicon) >= 17000 and lexicon['nihao'][0] == '你好'
