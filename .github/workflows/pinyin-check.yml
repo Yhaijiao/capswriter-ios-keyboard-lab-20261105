@@ -11,9 +11,12 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: pinyin-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   pinyin:
-    runs-on: macos-15-intel
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4

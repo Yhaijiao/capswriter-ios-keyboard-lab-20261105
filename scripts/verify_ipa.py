@@ -31,7 +31,8 @@ def verify(path, expected_version=None):
                 assert len(lexicon) >= 17000 and lexicon['nihao'][0] == '你好'
                 if app.get('CFBundleShortVersionString') == '0.4.1':
                     costs = json.loads(package.read(bundle + 'pinyin-costs.json'))
-                    assert len(costs) >= 17000 and costs['women']['我们'] > 0
+                    assert len(costs) >= 17000 and costs['women'][0] > 0
+                    assert all(len(costs[key]) == len(words) for key, words in lexicon.items())
                 assert b'MIT License' in package.read(bundle + 'ThirdPartyNotices.txt')
         forbidden = ('hot-personal', 'hot-auto', 'hosts.yml', '.env', 'private/')
         assert not any(any(part in name for part in forbidden) for name in package.namelist())

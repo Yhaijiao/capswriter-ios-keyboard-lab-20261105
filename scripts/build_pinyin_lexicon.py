@@ -46,21 +46,26 @@ def main():
             if re.fullmatch('[a-z]{1,32}', key) and word not in result[key] and len(result[key]) < 40:
                 result[key].append(word)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(dict(sorted(result.items())), ensure_ascii=False,
-                                      separators=(',', ':')), encoding='utf-8')
     frequencies = dict(rows)
     total = sum(frequencies.values())
     seeds = {word for words in SEEDS.values() for word in words}
     costs = {}
     for spelling, words in result.items():
-        costs[spelling] = {}
+        scored = []
         for word in words:
             frequency = max(frequencies.get(word, 1), 100000 if word in seeds else 1)
             reading_rank = 0
             if len(word) == 1:
                 readings = [reading.replace('ü', 'v') for reading in pinyin(word, style=Style.NORMAL, heteronym=True)[0]]
                 if spelling in readings: reading_rank = readings.index(spelling)
-            costs[spelling][word] = round(math.log(total / frequency) + reading_rank * 2.5, 4)
+            cost = round(math.log(total / frequency) + reading_rank * 2.5, 4)
+            seed_order = SEEDS.get(spelling, []).index(word) if word in SEEDS.get(spelling, []) else 1000
+            scored.append((seed_order, cost, word))
+        scored.sort()
+        result[spelling] = [word for _, _, word in scored]
+        costs[spelling] = [cost for _, cost, _ in scored]
+    args.output.write_text(json.dumps(dict(sorted(result.items())), ensure_ascii=False,
+                                      separators=(',', ':')), encoding='utf-8')
     costs_output = args.output.with_name('pinyin-costs.json')
     costs_output.write_text(json.dumps(dict(sorted(costs.items())), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     print(json.dumps({'pinyin_keys': len(result), 'word_entries': sum(map(len, result.values())),
