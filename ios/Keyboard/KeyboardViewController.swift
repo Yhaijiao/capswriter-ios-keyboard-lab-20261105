@@ -128,6 +128,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let button = Lab.button(title, symbol: symbol, action: action)
         button.configuration?.cornerStyle = .medium
         button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
+        button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = UIFont.systemFont(ofSize: 23); return output
+        }
+        button.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
         button.heightAnchor.constraint(equalToConstant: 44).isActive = true; return button
     }
     private func render() {
@@ -377,6 +381,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let space = key(mode == .pinyin ? "拼" : "EN") { [weak self] in self?.space() }
         space.accessibilityLabel = "空格 / 选字"
         space.contentHorizontalAlignment = .trailing
+        space.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = UIFont.systemFont(ofSize: 13); output.foregroundColor = Lab.muted; return output
+        }
         let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 74).isActive = true
         enter.configuration?.title = ""; enter.configuration?.image = UIImage(systemName: "return")
         enter.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
@@ -428,7 +435,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let interval = elapsed > 2 ? 0.04 : (elapsed > 0.9 ? 0.075 : 0.12)
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             guard let self = self, let gesture = self.deleteGesture,
-                  gesture.view?.window != nil, [.began, .changed].contains(gesture.state) else { return }
+                  gesture.view?.window != nil, (gesture.state == .began || gesture.state == .changed) else { return }
             self.deleteCharacter(); self.scheduleDeletion()
         }
         deleteTimer = timer; RunLoop.main.add(timer, forMode: .common)

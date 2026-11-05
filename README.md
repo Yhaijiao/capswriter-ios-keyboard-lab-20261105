@@ -10,7 +10,7 @@ v0.4.1 是零年费侧载实验版，支持语音 / EN / 拼音连续滑动与�
 - 类似参考截图的深色语音键盘布局，使用独立名称和系统图标。
 - 英文大小写、数字标点、离线全拼组合、删除、空格、Return、地球键。
 - 拼音词库约 3.1 万字词，最多保留 64 个拼音字母，提供最多 40 项候选。wom 可提供我们、我妈等组合，nihaom 可组合你好吗；长句可分段选字。候选栏横向滚动。
-- 简拼、语境模型、个人词频学习和展开候选网格仍待后续开发；当前排序由公共词库和组合规则决定。
+- 简拼、语境模型、个人词频学习和展开候选网格仍待后续开发；当前排序由公共词频、常见词种子和读音优先级决定。
 - 主 App 内置测试文本区、启用键盘说明。
 - 可选的局域网文字纠错测试：调用自己电脑现有的 CapsWriter 热词与规则源码，响应显示词库和源码版本。
 - 无广告、统计、收费 API；基本键盘不需要“允许完全访问”。
@@ -71,4 +71,3 @@ python -B -m unittest discover -s bridge -p 'test_*.py' -v
 - [Apple 第三方键盘权限](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard)
 - [GitHub 标准运行器](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 - [Sideloadly 官方 FAQ](https://sideloadly.io/faq)
-

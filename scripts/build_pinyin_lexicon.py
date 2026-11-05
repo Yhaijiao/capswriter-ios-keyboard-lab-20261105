@@ -47,13 +47,22 @@ def main():
                 result[key].append(word)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     frequencies = dict(rows)
+    # Jieba's tokenizer dictionary omits productive phrases such as 我妈 / 我买.
+    # Add a small public starter vocabulary; this is not personal word learning.
+    common = {}
+    for prefix in ['我', '你', '他', '她']:
+        for suffix in ['妈', '爸', '哥', '姐', '妹', '弟', '家', '想', '要', '有', '没', '买', '卖', '会', '能', '不', '是', '说', '在', '的']:
+            word = prefix + suffix
+            spelling = ''.join(lazy_pinyin(word, style=Style.NORMAL)).replace('ü', 'v')
+            common[word] = max(1, int(min(frequencies.get(prefix, 1), frequencies.get(suffix, 1)) * 0.35))
+            if word not in result[spelling] and len(result[spelling]) < 40: result[spelling].append(word)
     total = sum(frequencies.values())
     seeds = {word for words in SEEDS.values() for word in words}
     costs = {}
     for spelling, words in result.items():
         scored = []
         for word in words:
-            frequency = max(frequencies.get(word, 1), 100000 if word in seeds else 1)
+            frequency = max(frequencies.get(word, 1), common.get(word, 1), 100000 if word in seeds else 1)
             reading_rank = 0
             if len(word) == 1:
                 readings = [reading.replace('ü', 'v') for reading in pinyin(word, style=Style.NORMAL, heteronym=True)[0]]
