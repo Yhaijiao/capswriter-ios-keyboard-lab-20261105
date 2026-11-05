@@ -1,0 +1,23 @@
+name: Validate offline pinyin
+on:
+  push:
+    branches: [main, keyboard-041]
+    paths:
+      - ios/Shared/PinyinEngine.swift
+      - ios/Shared/pinyin-lexicon.json
+      - scripts/PinyinSmoke.swift
+      - .github/workflows/pinyin-check.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pinyin:
+    runs-on: macos-15-intel
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and exercise real Swift engine
+        run: |
+          mkdir -p build
+          swiftc -O -parse-as-library ios/Shared/PinyinEngine.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
+          build/pinyin-smoke ios/Shared/pinyin-lexicon.json

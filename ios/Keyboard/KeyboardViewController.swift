@@ -15,6 +15,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private let pager = KeyboardPagingScrollView()
     private let pageStrip = UIStackView()
     private weak var modeSelector: UISegmentedControl?
+    private weak var normalHeader: UIStackView?
+    private weak var pinyinHeader: UIStackView?
     private var pageWidth: CGFloat = 0
     private var centeringPages = false
     private var changingPage = false
@@ -29,7 +31,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var voiceID: String?
     private var voiceState = "idle"
     private var voiceText = ""
-    private var voiceMessage = "Tap to speak · 点击开始说话"
+    private var voiceMessage = "Tap to speak"
     private var voiceTimer: Timer?
     private var voiceBusy = false
     private var voicePolling = false
@@ -38,10 +40,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var voiceButton: UIButton?
     private var voiceStarted = Date.distantPast
     private var appeared = false
+    private var deleteTimer: Timer?
+    private var deleteStarted = Date.distantPast
+    private weak var deleteGesture: UILongPressGestureRecognizer?
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         appeared = false
+        stopDeleting()
         voiceTimer?.invalidate(); voiceTimer = nil
         if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
         if ["pending", "recording"].contains(voiceState) { cancelVoice() }
@@ -55,7 +61,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = Lab.background
-        heightConstraint = view.heightAnchor.constraint(equalToConstant: 384)
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: 324)
         heightConstraint?.priority = .defaultHigh; heightConstraint?.isActive = true
         content.axis = .vertical; content.spacing = 8
         content.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(content)
@@ -120,9 +126,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let button = Lab.button(title, symbol: symbol, action: action)
         button.configuration?.cornerStyle = .medium
         button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
-        button.heightAnchor.constraint(equalToConstant: 39).isActive = true; return button
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true; return button
     }
     private func render() {
+        stopDeleting()
         if content.arrangedSubviews.isEmpty { buildChrome() }
         centeringPages = true
         for item in pageStrip.arrangedSubviews { pageStrip.removeArrangedSubview(item); item.removeFromSuperview() }
@@ -130,8 +137,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             let pageMode = Mode(rawValue: (mode.rawValue + delta) % 3) ?? .voice
             let page = UIStackView(); page.axis = .vertical; page.spacing = 8
             page.isUserInteractionEnabled = index == 1; page.accessibilityElementsHidden = index != 1
-            if pageMode == .voice { renderVoice(content: page) } else { renderLetters(mode: pageMode, content: page) }
             page.addArrangedSubview(UIView())
+            if pageMode == .voice { renderVoice(content: page) } else { renderLetters(mode: pageMode, content: page) }
             pageStrip.addArrangedSubview(page)
             page.widthAnchor.constraint(equalTo: pager.frameLayoutGuide.widthAnchor).isActive = true
         }
@@ -151,7 +158,32 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }, for: .valueChanged)
         selector.widthAnchor.constraint(equalToConstant: 142).isActive = true
         let header = row([brand, UIView(), selector], equal: false); header.alignment = .center
+        let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
+        headerHeight.priority = .defaultHigh; headerHeight.isActive = true
+        normalHeader = header
         content.addArrangedSubview(header)
+        let composition = Lab.label("", size: 13, color: Lab.muted)
+        composition.accessibilityIdentifier = "pinyin-composition"
+        composition.lineBreakMode = .byTruncatingMiddle
+        composition.widthAnchor.constraint(lessThanOrEqualToConstant: 70).isActive = true
+        compositionLabel = composition
+        let candidatesScroll = UIScrollView(); candidatesScroll.showsHorizontalScrollIndicator = false
+        candidatesScroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = candidatesScroll
+        let candidates = UIStackView(); candidates.axis = .horizontal; candidates.spacing = 6
+        candidates.translatesAutoresizingMaskIntoConstraints = false; candidatesScroll.addSubview(candidates)
+        NSLayoutConstraint.activate([
+            candidates.topAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.topAnchor),
+            candidates.bottomAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.bottomAnchor),
+            candidates.leadingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.leadingAnchor),
+            candidates.trailingAnchor.constraint(equalTo: candidatesScroll.contentLayoutGuide.trailingAnchor),
+            candidates.heightAnchor.constraint(equalTo: candidatesScroll.frameLayoutGuide.heightAnchor)
+        ])
+        candidateRow = candidates
+        let candidateHeader = row([composition, candidatesScroll], equal: false)
+        let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 32)
+        candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
+        candidateHeader.isHidden = true; pinyinHeader = candidateHeader
+        content.addArrangedSubview(candidateHeader)
         pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
         pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true
         pager.delaysContentTouches = false; pager.canCancelContentTouches = true
@@ -171,7 +203,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
         globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         globe.widthAnchor.constraint(equalToConstant: 45).isActive = true; self.globe = globe
-        let note = Lab.label("左右拖动切换：语音 / EN / 拼", size: 10, color: Lab.muted)
+        let note = Lab.label("", size: 10, color: Lab.muted)
         note.textAlignment = .center; self.feedback = note
         let bridge = key("", symbol: "network") { [weak self] in self?.showBridge() }
         bridge.accessibilityLabel = "电脑热词连接设置"
@@ -179,10 +211,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         content.addArrangedSubview(row([globe, note, bridge], equal: false))
     }
     private func renderVoice(content: UIStackView) {
-        let spacer = UIView(); spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        content.addArrangedSubview(spacer)
         let hint = Lab.label(voiceMessage, size: 14, color: Lab.muted)
         hint.numberOfLines = 2
+        hint.lineBreakMode = .byTruncatingTail
         hint.textAlignment = .center; content.addArrangedSubview(hint)
         voiceHint = hint
         let mic = Lab.button("", symbol: "mic.fill") { [weak self] in self?.tapVoice() }
@@ -191,24 +222,18 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         mic.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 35)
         mic.accessibilityIdentifier = "keyboard-voice-button"
         mic.widthAnchor.constraint(equalToConstant: 152).isActive = true
-        mic.heightAnchor.constraint(equalToConstant: 65).isActive = true
+        mic.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        mic.heightAnchor.constraint(equalToConstant: 56).isActive = true
         voiceButton = mic; updateVoice()
         let micRow = row([UIView(), mic, UIView()], equal: false); micRow.distribution = .equalCentering
         content.addArrangedSubview(micRow)
-        let delete = key("", symbol: "delete.left") { [weak self] in self?.deleteCharacter() }
-        delete.accessibilityLabel = "删除一个字符"
-        content.addArrangedSubview(row([key("space") { [weak self] in self?.space() }, returnKey(), delete]))
         content.addArrangedSubview(row([
-            demoKey(),
-            key("。") { [weak self] in self?.input("。") },
-            key("@") { [weak self] in self?.input("@") }
+            key("space") { [weak self] in self?.space() },
+            key("@") { [weak self] in self?.input("@") }, deleteKey()
         ]))
-    }
-    private func demoKey() -> UIButton {
-        let button = key("演示") { [weak self] in self?.input(Lab.chineseSample) }
-        button.accessibilityIdentifier = "keyboard-test-button"
-        button.accessibilityLabel = "插入演示文字，不录音"
-        return button
+        let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 152).isActive = true
+        let enterRow = row([UIView(), enter, UIView()], equal: false); enterRow.distribution = .equalCentering
+        content.addArrangedSubview(enterRow)
     }
 
     private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,
@@ -309,25 +334,6 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         resetVoice("录音已取消 · 点击重新开始")
     }
     private func renderLetters(mode: Mode, content: UIStackView) {
-        if mode == .pinyin {
-            let label = Lab.label("输入拼音，点击候选字词", size: 13, color: Lab.muted)
-            label.accessibilityIdentifier = "pinyin-composition"
-            label.heightAnchor.constraint(equalToConstant: 18).isActive = true
-            self.compositionLabel = label; content.addArrangedSubview(label)
-            let scroll = UIScrollView(); scroll.tag = 901; scroll.showsHorizontalScrollIndicator = false
-            scroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = scroll
-            scroll.heightAnchor.constraint(equalToConstant: 32).isActive = true
-            let candidates = UIStackView(); candidates.axis = .horizontal; candidates.spacing = 8
-            candidates.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(candidates)
-            NSLayoutConstraint.activate([
-                candidates.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-                candidates.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-                candidates.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-                candidates.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-                candidates.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
-            ])
-            self.candidateRow = candidates; content.addArrangedSubview(scroll)
-        }
         let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+="] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
         for (index, line) in layouts.enumerated() {
             var buttons: [UIView] = []
@@ -346,8 +352,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 button.accessibilityIdentifier = "key-" + title; buttons.append(button)
             }
             if index == 2 {
-                let delete = key("", symbol: "delete.left") { [weak self] in self?.deleteCharacter() }
-                delete.accessibilityLabel = "删除一个字符"; buttons.append(delete)
+                buttons.append(deleteKey())
             }
             content.addArrangedSubview(row(buttons))
         }
@@ -378,6 +383,38 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if composition.isEmpty { textDocumentProxy.deleteBackward() }
         else { composition.removeLast(); updateCandidates() }
     }
+    private func deleteKey() -> UIButton {
+        let button = key("", symbol: "delete.left") { [weak self] in self?.deleteCharacter() }
+        button.accessibilityIdentifier = "keyboard-delete"
+        button.accessibilityLabel = "删除"
+        button.accessibilityHint = "短按删除一个字符，长按加速连续删除"
+        let gesture = UILongPressGestureRecognizer(target: self, action: #selector(deleteHeld(_:)))
+        gesture.minimumPressDuration = 0.4
+        button.addGestureRecognizer(gesture)
+        return button
+    }
+    @objc private func deleteHeld(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            stopDeleting(); deleteGesture = gesture; deleteStarted = Date()
+            deleteCharacter(); scheduleDeletion()
+        case .changed:
+            if let button = gesture.view, !button.bounds.insetBy(dx: -10, dy: -10).contains(gesture.location(in: button)) { stopDeleting() }
+        case .ended, .cancelled, .failed: stopDeleting()
+        default: break
+        }
+    }
+    private func scheduleDeletion() {
+        let elapsed = Date().timeIntervalSince(deleteStarted)
+        let interval = elapsed > 2 ? 0.04 : (elapsed > 0.9 ? 0.075 : 0.12)
+        let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+            guard let self = self, let gesture = self.deleteGesture,
+                  gesture.view?.window != nil, [.began, .changed].contains(gesture.state) else { return }
+            self.deleteCharacter(); self.scheduleDeletion()
+        }
+        deleteTimer = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+    private func stopDeleting() { deleteTimer?.invalidate(); deleteTimer = nil; deleteGesture = nil }
     private func choose(_ candidate: PinyinCandidate) {
         textDocumentProxy.insertText(candidate.text)
         composition = String(composition.dropFirst(candidate.consumed)); updateCandidates()
@@ -391,8 +428,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         updateCandidates()
     }
     private func updateCandidates() {
+        let composing = mode == .pinyin && !composition.isEmpty
+        normalHeader?.isHidden = composing; pinyinHeader?.isHidden = !composing
         guard mode == .pinyin else { return }
-        compositionLabel?.text = composition.isEmpty ? "输入拼音，点击候选字词 · v 代替 ü" : composition
+        compositionLabel?.text = composition
         guard let row = candidateRow else { return }
         for view in row.arrangedSubviews { row.removeArrangedSubview(view); view.removeFromSuperview() }
         for candidate in pinyin.candidates(for: composition) {
