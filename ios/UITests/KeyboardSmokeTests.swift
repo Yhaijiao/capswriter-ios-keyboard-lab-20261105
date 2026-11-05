@@ -18,9 +18,9 @@ final class KeyboardSmokeTests: XCTestCase {
         findAndTap(settings.staticTexts["General"].firstMatch, in: settings)
         findAndTap(settings.staticTexts["Keyboard"].firstMatch, in: settings)
         findAndTap(settings.cells["KEYBOARDS"].firstMatch, in: settings)
-        let add = settings.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Add New Keyboard")).firstMatch
-        findAndTap(add, in: settings)
-        findAndTap(settings.staticTexts["CapsWriter Lab"].firstMatch, in: settings)
+        findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
+        let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
+        findAndTap(thirdParty, in: settings)
 
         let app = XCUIApplication()
         app.launch()
