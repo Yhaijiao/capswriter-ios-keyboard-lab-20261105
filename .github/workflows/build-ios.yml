@@ -51,7 +51,7 @@ jobs:
           xcodebuild -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
             -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO build | tee build-simulator.log
-          DEVICE_ID=$(xcrun simctl create CapsWriter-QA 'iPhone 16 Pro Max')
+          DEVICE_ID=$(xcrun simctl create CapsWriter-QA 'iPhone 15 Pro Max')
           xcrun simctl boot "$DEVICE_ID"
           xcrun simctl bootstatus "$DEVICE_ID" -b
           xcrun simctl install "$DEVICE_ID" build/simulator/Build/Products/Debug-iphonesimulator/CapsWriterLab.app

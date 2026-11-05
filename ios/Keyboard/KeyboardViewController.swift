@@ -140,9 +140,12 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
             var buttons: [UIView] = []
             if index == 2 && !symbols {
                 let shift = key("", symbol: shifted ? "shift.fill" : "shift") { [weak self] in
-                    guard let self = self else { return }; self.shifted.toggle(); self.render()
+                    guard let self = self else { return }
+                    if self.mode == .pinyin { self.changeMode(.english) }
+                    else { self.shifted.toggle(); self.render() }
                 }
-                shift.accessibilityLabel = "大小写切换"; buttons.append(shift)
+                shift.accessibilityLabel = mode == .pinyin ? "切换到英文" : "大小写切换"
+                buttons.append(shift)
             }
             for letter in line {
                 let title = !symbols && mode == .english && shifted ? String(letter).uppercased() : String(letter)

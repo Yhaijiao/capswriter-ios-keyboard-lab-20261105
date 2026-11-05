@@ -5,7 +5,13 @@ final class KeyboardSmokeTests: XCTestCase {
 
     private func findAndTap(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<5 {
-            if element.exists && element.isHittable { element.tap(); return }
+            if element.exists {
+                let frame = element.frame
+                if !frame.isEmpty && app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+                    element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    return
+                }
+            }
             app.swipeUp()
         }
         XCTAssertTrue(element.waitForExistence(timeout: 5), app.debugDescription)
@@ -16,7 +22,7 @@ final class KeyboardSmokeTests: XCTestCase {
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
         findAndTap(settings.staticTexts["General"].firstMatch, in: settings)
-        findAndTap(settings.staticTexts["Keyboard"].firstMatch, in: settings)
+        findAndTap(settings.cells["Keyboard"].firstMatch, in: settings)
         findAndTap(settings.cells["KEYBOARDS"].firstMatch, in: settings)
         findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
         let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
