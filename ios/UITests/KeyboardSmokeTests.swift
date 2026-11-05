@@ -48,7 +48,7 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\n"))
 
         let selector = app.segmentedControls["keyboard-mode-selector"]
-        selector.swipeLeft()
+        app.scrollViews["keyboard-pages"].swipeLeft()
         XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
         for letter in "hello" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello"))

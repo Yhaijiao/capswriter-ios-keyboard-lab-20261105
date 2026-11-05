@@ -83,6 +83,16 @@ class VoiceTests(unittest.TestCase):
         self.now += MAX_SECONDS + 181
         with self.assertRaises(VoiceError): self.relay.result(job_id)
 
+    def test_live_recording_can_cross_one_minute(self):
+        job_id = self.begin()
+        for _ in range(17):
+            self.now += 4
+            self.relay.agent(self.agent)
+        self.assertEqual(self.relay.result(job_id)['state'], 'recording')
+        self.relay.stop(job_id)
+        result = self.relay.upload(self.payload(job_id, struct.pack('<f', .1) * (16000 * 65)))
+        self.assertEqual(result['state'], 'done')
+
     def test_stale_recognition_cannot_overwrite_cancellation(self):
         job_id = self.begin()
         def transcribe(pcm, task_id):
