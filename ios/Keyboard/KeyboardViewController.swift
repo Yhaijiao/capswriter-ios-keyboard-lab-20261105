@@ -4,7 +4,7 @@ private final class KeyboardPagingScrollView: UIScrollView {
     override func touchesShouldCancel(in view: UIView) -> Bool { true }
 }
 
-final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDelegate, UIScrollViewDelegate {
+final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate {
     private enum Mode: Int { case voice, english, pinyin }
     private var mode: Mode = .voice
     private var shifted = false
@@ -73,36 +73,6 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         if width > 0 && abs(width - pageWidth) > 0.5 {
             pageWidth = width
             centeringPages = true; pager.setContentOffset(CGPoint(x: width, y: 0), animated: false); centeringPages = false
-        }
-    }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        var target = touch.view
-        while let item = target, item !== view {
-            if item.tag == 700 || item.tag == 901 { return false }
-            target = item.superview
-        }
-        return true
-    }
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        let velocity = pan.velocity(in: view)
-        return !changingPage && abs(velocity.x) > abs(velocity.y) * 1.2
-    }
-    @objc private func headerPanned(_ gesture: UIPanGestureRecognizer) {
-        guard pageWidth > 0, !changingPage else { return }
-        switch gesture.state {
-        case .began, .changed:
-            let offset = max(0, min(pageWidth * 2, pageWidth - gesture.translation(in: view).x))
-            pager.setContentOffset(CGPoint(x: offset, y: 0), animated: false)
-        case .ended, .cancelled:
-            let distance = pager.contentOffset.x - pageWidth
-            let velocity = gesture.velocity(in: view).x
-            var target = 1
-            if gesture.state == .ended && (abs(distance) > pageWidth * 0.22 || abs(velocity) > 350) {
-                target = abs(velocity) > 350 ? (velocity < 0 ? 2 : 0) : (distance > 0 ? 2 : 0)
-            }
-            animatePage(target)
-        default: break
         }
     }
     private func changeMode(_ next: Mode) {
@@ -177,8 +147,6 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         }, for: .valueChanged)
         selector.widthAnchor.constraint(equalToConstant: 142).isActive = true
         let header = row([brand, UIView(), selector], equal: false); header.alignment = .center
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(headerPanned(_:)))
-        pan.delegate = self; header.addGestureRecognizer(pan)
         content.addArrangedSubview(header)
         pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
         pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true

@@ -58,7 +58,7 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello"))
         attach(app, name: "English keyboard")
 
-        selector.swipeLeft()
+        app.scrollViews["keyboard-pages"].swipeLeft()
         XCTAssertTrue(app.staticTexts["pinyin-composition"].waitForExistence(timeout: 5))
         for letter in "nihao" { app.buttons["key-" + String(letter)].tap() }
         let candidate = app.buttons["candidate-你好"]
@@ -78,14 +78,14 @@ final class KeyboardSmokeTests: XCTestCase {
         unfinished.tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("你好我们"))
         attach(app, name: "Chinese pinyin keyboard")
-        selector.swipeLeft()
+        app.scrollViews["keyboard-pages"].swipeLeft()
         XCTAssertTrue(testButton.waitForExistence(timeout: 5))
         attach(app, name: "Voice test keyboard")
-        selector.swipeRight()
+        app.scrollViews["keyboard-pages"].swipeRight()
         XCTAssertTrue(app.staticTexts["pinyin-composition"].waitForExistence(timeout: 5))
-        selector.swipeRight()
+        app.scrollViews["keyboard-pages"].swipeRight()
         XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
-        selector.swipeRight()
+        app.scrollViews["keyboard-pages"].swipeRight()
         XCTAssertTrue(testButton.waitForExistence(timeout: 5))
         // Direct mode selection uses the same sliding transition.
         selector.buttons["EN"].tap()
