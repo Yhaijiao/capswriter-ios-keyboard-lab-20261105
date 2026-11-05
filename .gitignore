@@ -1,0 +1,13 @@
+.DS_Store
+*.xcodeproj/
+build/
+artifacts/
+private/
+__pycache__/
+*.pyc
+.env
+*.p12
+*.mobileprovision
+*.key
+*.ipa
+*.log

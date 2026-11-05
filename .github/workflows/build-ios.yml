@@ -1,0 +1,65 @@
+name: Build unsigned iPhone keyboard
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source and bridge behavior
+        run: |
+          python3 -B scripts/check_sources.py
+          python3 -B -m unittest discover -s bridge -p 'test_*.py' -v
+      - name: Check toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Generate project
+        run: |
+          command -v xcodegen || brew install xcodegen
+          xcodegen generate
+      - name: Build for physical iPhone
+        run: |
+          set -o pipefail
+          xcodebuild -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO build | tee build-device.log
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p artifacts/Payload
+          ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app artifacts/Payload/CapsWriterLab.app
+          test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterKeyboard.appex
+          cd artifacts
+          zip -qr CapsWriterLab-0.1.0-unsigned.ipa Payload
+          shasum -a 256 CapsWriterLab-0.1.0-unsigned.ipa > SHA256SUMS.txt
+          rm -r Payload
+      - name: Verify package
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.1.0-unsigned.ipa
+      - name: Build simulator and take screenshot
+        run: |
+          set -o pipefail
+          xcodebuild -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/simulator CODE_SIGNING_ALLOWED=NO build | tee build-simulator.log
+          DEVICE_ID=$(xcrun simctl create CapsWriter-QA 'iPhone 16 Pro Max')
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcrun simctl install "$DEVICE_ID" build/simulator/Build/Products/Debug-iphonesimulator/CapsWriterLab.app
+          xcrun simctl launch "$DEVICE_ID" org.capswriterlab.keyboard
+          sleep 3
+          xcrun simctl io "$DEVICE_ID" screenshot artifacts/app-simulator.png
+          xcrun simctl shutdown "$DEVICE_ID"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: CapsWriterLab-iPhone
+          path: |
+            artifacts/*
+            build-device.log
+            build-simulator.log
+          retention-days: 14
