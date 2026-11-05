@@ -8,7 +8,7 @@ settings:
     SWIFT_VERSION: '5.0'
     TARGETED_DEVICE_FAMILY: '1'
     MARKETING_VERSION: '0.3.0'
-    CURRENT_PROJECT_VERSION: '4'
+    CURRENT_PROJECT_VERSION: '5'
     CODE_SIGNING_ALLOWED: NO
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
@@ -31,6 +31,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
+        CFBundleURLTypes:
+          - CFBundleURLName: org.capswriterlab.pairing
+            CFBundleURLSchemes: [capswriterlab]
         NSMicrophoneUsageDescription: 在你主动开启的限时语音会话中采集声音，将选定片段交给自己的电脑识别。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -12,6 +12,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         self.window = window
         return true
     }
+    func application(_ app: UIApplication, open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        guard url.scheme == "capswriterlab", url.host == "pair",
+              let navigation = window?.rootViewController as? UINavigationController,
+              let controller = navigation.viewControllers.first as? LabViewController else { return false }
+        controller.offerPairing(url); return true
+    }
 }
 
 final class LabViewController: UIViewController, UITextViewDelegate {
@@ -117,6 +124,24 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         field.borderStyle = .roundedRect; field.autocorrectionType = .no
         field.autocapitalizationType = .none; field.font = .systemFont(ofSize: 16)
         field.heightAnchor.constraint(equalToConstant: 46).isActive = true
+    }
+    func offerPairing(_ url: URL) {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        let values = parts.queryItems ?? []
+        guard let a = values.first(where: { $0.name == "address" })?.value,
+              let t = values.first(where: { $0.name == "token" })?.value,
+              t.count >= 24, t.count <= 128,
+              let target = URLComponents(string: a), target.scheme == "http",
+              target.user == nil, target.password == nil,
+              let host = target.host, BridgeClient.isLocal(host) else { return }
+        let alert = UIAlertController(title: "连接你的电脑", message: "地址：\(a)\n仅在这是你自己的电脑时确认。语音片段和测试文字将发送到这台电脑。", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "使用此电脑", style: .default) { [weak self] _ in
+            guard let self = self else { return }
+            self.voice.stop(); self.address.text = a; self.token.text = t
+            self.savePairing(); self.connect(correct: false)
+        })
+        present(alert, animated: true)
     }
     private func connect(correct: Bool) {
         let a = address.text ?? "", t = token.text ?? ""
