@@ -6,6 +6,7 @@ final class KeyboardViewController: UIInputViewController {
     private let content = UIStackView()
     private var english = false
     private var previewedText: String?
+    private var bridgeRequestID = UUID()
     private var heightConstraint: NSLayoutConstraint?
     private weak var globe: UIButton?
     private var micContainer: UIView?
@@ -112,6 +113,8 @@ final class KeyboardViewController: UIInputViewController {
         }
         // A keyboard cannot present a host-app alert. Use an in-keyboard settings panel.
         if let panel = view.viewWithTag(700) { panel.removeFromSuperview(); return }
+        previewedText = nil
+        bridgeRequestID = UUID()
         let panel = UIStackView(); panel.tag = 700
         panel.axis = .vertical; panel.spacing = 10
         panel.backgroundColor = Lab.background
@@ -138,11 +141,14 @@ final class KeyboardViewController: UIInputViewController {
         let run = Lab.button("检查版本 / 纠正测试短句") { [weak self, weak result] in
             guard let self = self else { return }
             self.previewedText = nil
+            let requestID = UUID()
+            self.bridgeRequestID = requestID
             let a = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
             let t = UserDefaults.standard.string(forKey: "bridge.token") ?? ""
             result?.text = "连接中…"
             // Sends a fixed demo phrase, never reads the user's surrounding document.
             BridgeClient.request(address: a, token: t, text: "测试热词：卡普斯赖特") { [weak self, weak result] reply in
+                guard self?.bridgeRequestID == requestID else { return }
                 switch reply {
                 case .success(let value):
                     self?.previewedText = value.text
@@ -156,7 +162,10 @@ final class KeyboardViewController: UIInputViewController {
             self.textDocumentProxy.insertText(text)
             panel?.removeFromSuperview()
         }
-        let close = Lab.button("返回键盘") { [weak panel] in panel?.removeFromSuperview() }
+        let close = Lab.button("返回键盘") { [weak self, weak panel] in
+            self?.bridgeRequestID = UUID(); self?.previewedText = nil
+            panel?.removeFromSuperview()
+        }
         panel.addArrangedSubview(paste)
         panel.addArrangedSubview(run); panel.addArrangedSubview(result)
         let bottom = UIStackView(arrangedSubviews: [insert, close]); bottom.spacing = 8
