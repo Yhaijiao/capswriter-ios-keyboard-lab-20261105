@@ -4,17 +4,9 @@ final class KeyboardSmokeTests: XCTestCase {
     override func setUp() { continueAfterFailure = false }
 
     private func findAndTap(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<5 {
-            if element.exists {
-                let frame = element.frame
-                if !frame.isEmpty && app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) {
-                    element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                    return
-                }
-            }
-            app.swipeUp()
-        }
-        XCTAssertTrue(element.waitForExistence(timeout: 5), app.debugDescription)
+        // XCTest scrolls table cells into view before tapping. Stale cell frames
+        // during Settings navigation must not be used as screen coordinates.
+        XCTAssertTrue(element.waitForExistence(timeout: 15), app.debugDescription)
         element.tap()
     }
 
@@ -35,6 +27,11 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["清空测试区"].firstMatch.tap()
         editor.tap()
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 15) {
+            attach(app, name: "Keyboard activation retry")
+            editor.tap()
+        }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20), app.debugDescription)
         dismissSystemTypingIntroduction(in: app, wait: true)
         let testButton = app.buttons["keyboard-test-button"]
         for _ in 0..<6 {
