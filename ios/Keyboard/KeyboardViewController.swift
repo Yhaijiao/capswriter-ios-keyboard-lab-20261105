@@ -149,7 +149,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func buildChrome() {
         let brand = Lab.label("◖ CapsWriter", size: 19); brand.font = .boldSystemFont(ofSize: 19)
-        let selector = UISegmentedControl(items: ["波形", "EN", "拼"])
+        let selector = UISegmentedControl(items: ["", "EN", "拼"])
+        selector.setImage(UIImage(systemName: "waveform"), forSegmentAt: 0)
         selector.selectedSegmentIndex = mode.rawValue
         modeSelector = selector
         selector.accessibilityIdentifier = "keyboard-mode-selector"
@@ -335,8 +336,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func renderLetters(mode: Mode, content: UIStackView) {
         let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+="] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+        var letterWidth: NSLayoutDimension?
         for (index, line) in layouts.enumerated() {
             var buttons: [UIView] = []
+            var shiftButton: UIButton?
             if index == 2 && !symbols {
                 let shift = key("", symbol: shifted ? "shift.fill" : "shift") { [weak self] in
                     guard let self = self else { return }
@@ -344,24 +347,38 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                     else { self.shifted.toggle(); self.render() }
                 }
                 shift.accessibilityLabel = mode == .pinyin ? "切换到英文" : "大小写切换"
+                shiftButton = shift
                 buttons.append(shift)
             }
             for letter in line {
                 let title = !symbols && mode == .english && shifted ? String(letter).uppercased() : String(letter)
                 let button = key(title) { [weak self] in self?.input(title) }
+                if index == 0 && letterWidth == nil { letterWidth = button.widthAnchor }
+                if !symbols && index > 0, let width = letterWidth { button.widthAnchor.constraint(equalTo: width).isActive = true }
                 button.accessibilityIdentifier = "key-" + title; buttons.append(button)
             }
             if index == 2 {
-                buttons.append(deleteKey())
+                let delete = deleteKey()
+                if let shift = shiftButton { delete.widthAnchor.constraint(equalTo: shift.widthAnchor).isActive = true }
+                buttons.append(delete)
             }
-            content.addArrangedSubview(row(buttons))
+            if !symbols && index == 1 {
+                let left = UIView(), right = UIView()
+                left.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
+                content.addArrangedSubview(row([left] + buttons + [right], equal: false))
+            } else { content.addArrangedSubview(row(buttons, equal: symbols || index == 0)) }
         }
         let number = key(symbols ? "ABC" : "123") { [weak self] in
             guard let self = self else { return }; self.commitComposition(); self.symbols.toggle(); self.render()
         }
         number.widthAnchor.constraint(equalToConstant: 74).isActive = true
-        let space = key(mode == .pinyin ? "空格 / 选字" : "space") { [weak self] in self?.space() }
+        let space = key(mode == .pinyin ? "拼" : "EN") { [weak self] in self?.space() }
+        space.accessibilityLabel = "空格 / 选字"
+        space.contentHorizontalAlignment = .trailing
         let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 74).isActive = true
+        enter.configuration?.title = ""; enter.configuration?.image = UIImage(systemName: "return")
+        enter.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
+        enter.configuration?.baseForegroundColor = .black
         content.addArrangedSubview(row([number, space, enter], equal: false))
     }
     private func returnKey() -> UIButton {

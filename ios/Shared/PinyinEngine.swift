@@ -116,9 +116,13 @@ final class PinyinEngine {
     private func ranked(_ choices: [Choice], limit: Int) -> [Choice] {
         var best: [String: Double] = [:]
         for choice in choices { best[choice.text] = min(best[choice.text] ?? .infinity, choice.score) }
-        return best.map { Choice(text: $0.key, score: $0.value) }.sorted {
-            $0.score == $1.score ? $0.text < $1.text : $0.score < $1.score
-        }.prefix(limit).map { $0 }
+        var ordered: [Choice] = []
+        for (text, score) in best { ordered.append(Choice(text: text, score: score)) }
+        ordered.sort { (left: Choice, right: Choice) -> Bool in
+            if left.score == right.score { return left.text < right.text }
+            return left.score < right.score
+        }
+        return Array(ordered.prefix(limit))
     }
 
     private func matchingKeys(_ buffer: String) -> [String] {
