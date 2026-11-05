@@ -14,7 +14,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 }
 
-final class LabViewController: UIViewController {
+final class LabViewController: UIViewController, UITextViewDelegate {
+    private let scroll = UIScrollView()
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
@@ -24,7 +25,6 @@ final class LabViewController: UIViewController {
         super.viewDidLoad()
         title = "CapsWriter Lab"
         view.backgroundColor = Lab.background
-        let scroll = UIScrollView()
         scroll.keyboardDismissMode = .interactive
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
@@ -57,6 +57,7 @@ final class LabViewController: UIViewController {
         })
         stack.addArrangedSubview(Lab.label("2  在这里试一试", size: 21))
         editor.text = "点击这里，长按地球键切换到 CapsWriter Lab。\n"
+        editor.delegate = self
         editor.font = .systemFont(ofSize: 18)
         editor.textColor = .white; editor.backgroundColor = Lab.surface
         editor.layer.cornerRadius = 18; editor.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
@@ -85,6 +86,18 @@ final class LabViewController: UIViewController {
         stack.addArrangedSubview(Lab.label("4  免费安装与续签", size: 21))
         stack.addArrangedSubview(Lab.label("使用同一个 Apple 账号和相同 Bundle ID 续签。Sideloadly 中开启自动刷新，电脑保持运行并能找到手机。免费签名每 7 天到期；实际自动刷新需要跨日观察。\n如果过期，重新签名安装；先备份重要测试内容。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("隐私：无广告、无分析统计、无云端语音接口。主 App 与键盘设置独立保存，本版不依赖 App Groups。", size: 13, color: Lab.muted))
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
+            name: UIResponder.keyboardDidShowNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
+            name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) { revealEditor() }
+    @objc private func keyboardLayoutChanged() { revealEditor() }
+    private func revealEditor() {
+        guard editor.isFirstResponder else { return }
+        view.layoutIfNeeded()
+        scroll.scrollRectToVisible(editor.convert(editor.bounds, to: scroll).insetBy(dx: 0, dy: -12), animated: false)
     }
 
     private func configure(_ field: UITextField, placeholder: String, key: String) {

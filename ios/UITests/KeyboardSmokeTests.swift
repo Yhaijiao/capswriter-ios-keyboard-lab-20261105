@@ -59,6 +59,7 @@ final class KeyboardSmokeTests: XCTestCase {
         for letter in "nihao" { app.buttons["key-" + String(letter)].tap() }
         let candidate = app.buttons["candidate-你好"]
         XCTAssertTrue(candidate.waitForExistence(timeout: 5))
+        attach(app, name: "Chinese pinyin candidates")
         candidate.tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("你好"))
         attach(app, name: "Chinese pinyin keyboard")

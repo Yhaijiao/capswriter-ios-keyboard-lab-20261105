@@ -13,6 +13,7 @@ def verify(path):
         extension = plistlib.loads(package.read(extbase + 'Info.plist'))
         assert app['CFBundleIdentifier'] == 'org.capswriterlab.keyboard'
         assert extension['CFBundleIdentifier'] == app['CFBundleIdentifier'] + '.extension'
+        assert extension['CFBundleVersion'] == app['CFBundleVersion']
         spec = extension['NSExtension']
         assert spec['NSExtensionPointIdentifier'] == 'com.apple.keyboard-service'
         assert spec['NSExtensionPrincipalClass'].endswith('.KeyboardViewController')
