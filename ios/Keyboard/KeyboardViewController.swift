@@ -189,7 +189,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     }
     private func scheduleVoicePoll() {
         voiceTimer?.invalidate()
-        let timer = Timer(timeInterval: .45, repeats: true) { [weak self] _ in self?.pollVoice() }
+        let timer = Timer(timeInterval: 0.45, repeats: true) { [weak self] _ in self?.pollVoice() }
         voiceTimer = timer; RunLoop.main.add(timer, forMode: .common)
     }
     private func pollVoice() {

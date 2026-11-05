@@ -81,7 +81,7 @@ final class VoiceSession {
             active = true; agentID = UUID().uuidString
             expires = Date().addingTimeInterval(600); lastSuccess = Date()
             lock.lock(); lastFrames = Date(); lock.unlock()
-            let timer = Timer(timeInterval: .35, repeats: true) { [weak self] _ in self?.poll() }
+            let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in self?.poll() }
             self.timer = timer; RunLoop.main.add(timer, forMode: .common)
             onStatus?("语音会话已开启 · 麦克风持续工作，10 分钟后自动关闭。\n回到输入框，在键盘点击麦克风开始，再次点击停止。")
             poll()
