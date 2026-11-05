@@ -1,7 +1,8 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.3.0"
+    static let version = "0.4.0"
+    static let maxRecordingSeconds = 300
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
     static let background = UIColor(red: 0.075, green: 0.075, blue: 0.085, alpha: 1)
@@ -45,6 +46,7 @@ struct BridgeReply: Decodable {
     var voice_enabled: Bool?
     var agent_ready: Bool?
     var asr_ready: Bool?
+    var max_seconds: Int?
 }
 
 enum BridgeError: LocalizedError {

@@ -2,7 +2,7 @@ import AVFoundation
 import UIKit
 
 // The containing app owns the microphone. No App Groups or private URL APIs.
-// An explicitly armed session records in the background for at most 10 minutes.
+// An explicitly armed session records in the background for a chosen duration.
 // Idle audio is discarded; only a keyboard-requested segment is held in memory.
 final class VoiceSession {
     var onStatus: ((String) -> Void)?
@@ -23,6 +23,7 @@ final class VoiceSession {
     private var completingID: String?
     private var generation = UUID()
     private var lastFrames = Date.distantPast
+    private var sessionMinutes = 10
 
     init() {
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted),
@@ -33,7 +34,7 @@ final class VoiceSession {
             name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     }
 
-    func start(address: String, token: String) {
+    func start(address: String, token: String, sessionMinutes: Int = 10) {
         guard !active else { return }
         let request = UUID(); generation = request
         onStatus?("正在检查电脑连接…")
@@ -46,19 +47,24 @@ final class VoiceSession {
                     self.onStatus?("请启动电脑 CapsWriter 识别服务和新版语音桥接。")
                     return
                 }
+                guard (reply.max_seconds ?? 60) >= Lab.maxRecordingSeconds else {
+                    self.onStatus?("请先运行新版 v0.4 电脑语音桥接，再开启 5 分钟录音。")
+                    return
+                }
                 AVAudioApplication.requestRecordPermission { [weak self] allowed in
                     DispatchQueue.main.async {
                         guard let self = self, self.generation == request else { return }
                         guard allowed else { self.onStatus?("请在 App 设置中允许麦克风后重试。"); return }
-                        self.arm(address: address, token: token)
+                        self.arm(address: address, token: token, sessionMinutes: sessionMinutes)
                     }
                 }
             }
         }
     }
 
-    private func arm(address: String, token: String) {
+    private func arm(address: String, token: String, sessionMinutes: Int) {
         self.address = address; self.token = token
+        self.sessionMinutes = [10, 30, 60].contains(sessionMinutes) ? sessionMinutes : 10
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement, options: [])
@@ -79,11 +85,11 @@ final class VoiceSession {
             tapInstalled = true
             audio.prepare(); try audio.start()
             active = true; agentID = UUID().uuidString
-            expires = Date().addingTimeInterval(600); lastSuccess = Date()
+            expires = Date().addingTimeInterval(TimeInterval(self.sessionMinutes * 60)); lastSuccess = Date()
             lock.lock(); lastFrames = Date(); lock.unlock()
             let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in self?.poll() }
             self.timer = timer; RunLoop.main.add(timer, forMode: .common)
-            onStatus?("语音会话已开启 · 麦克风持续工作，10 分钟后自动关闭。\n回到输入框，在键盘点击麦克风开始，再次点击停止。")
+            onStatus?("语音会话已开启 · 麦克风持续工作，\(self.sessionMinutes) 分钟后自动关闭。\n回到输入框，在键盘点击麦克风开始，再次点击停止。")
             poll()
         } catch {
             stop(message: "麦克风启动失败：\(error.localizedDescription)")
@@ -102,13 +108,13 @@ final class VoiceSession {
         lock.lock(); defer { lock.unlock() }
         lastFrames = Date()
         guard segmentID != nil else { return }
-        let bytes = min(Int(converted.frameLength) * 4, 16000 * 60 * 4 - samples.count)
+        let bytes = min(Int(converted.frameLength) * 4, 16000 * Lab.maxRecordingSeconds * 4 - samples.count)
         if bytes > 0 { samples.append(UnsafeBufferPointer(start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self), count: bytes)) }
     }
 
     private func poll() {
         guard active else { return }
-        if Date() > expires { stop(message: "10 分钟语音会话已结束，麦克风已关闭。"); return }
+        if Date() > expires { stop(message: "\(sessionMinutes) 分钟语音会话已结束，麦克风已关闭。"); return }
         lock.lock(); let framesAge = Date().timeIntervalSince(lastFrames); lock.unlock()
         if !audio.isRunning || framesAge > 5 { stop(message: "麦克风已中断，请重新开启语音会话。"); return }
         if Date().timeIntervalSince(lastSuccess) > 8 { stop(message: "电脑连接已断开，麦克风已关闭。"); return }
@@ -135,11 +141,11 @@ final class VoiceSession {
             lock.unlock()
             BridgeClient.call(address: address, token: token, path: "/v1/voice/ack",
                               value: ["id": id, "agent_id": agentID]) { _ in }
-            onStatus?("正在录音 · 单段最长 60 秒，可在键盘停止。")
+            onStatus?("正在录音 · 单段最长 5 分钟，可在键盘停止。")
         } else if reply.state == "stopping", let id = reply.id {
             finish(id)
         } else if reply.state == "recording", let id = reply.id {
-            lock.lock(); let full = samples.count >= 16000 * 60 * 4; lock.unlock()
+            lock.lock(); let full = samples.count >= 16000 * Lab.maxRecordingSeconds * 4; lock.unlock()
             if full { finish(id) }
         } else if ["cancelled", "error", "idle", "done", "consumed"].contains(reply.state ?? "") {
             lock.lock(); segmentID = nil; samples = Data(); lock.unlock()
@@ -157,7 +163,7 @@ final class VoiceSession {
         BridgeClient.call(address: address, token: token, path: "/v1/voice/audio",
                           value: ["id": id, "agent_id": agentID, "encoding": "f32le",
                                   "sample_rate": 16000, "audio": pcm.base64EncodedString()],
-                          timeout: 130) { [weak self] result in
+                          timeout: 190) { [weak self] result in
             guard let self = self, self.generation == current else { return }
             self.uploading = false
             switch result {

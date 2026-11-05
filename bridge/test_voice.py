@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 
 from engine import DemoEngine
 from server import make_handler
-from voice import VoiceRelay, VoiceError, DesktopASR
+from voice import VoiceRelay, VoiceError, DesktopASR, MAX_SECONDS
 
 
 class FakeASR:
@@ -80,7 +80,7 @@ class VoiceTests(unittest.TestCase):
     def test_expiry_and_agent_closed(self):
         job_id = self.begin(); self.relay.agent(self.agent, False)
         self.assertEqual(self.relay.result(job_id)['state'], 'error')
-        self.now += 241
+        self.now += MAX_SECONDS + 181
         with self.assertRaises(VoiceError): self.relay.result(job_id)
 
     def test_stale_recognition_cannot_overwrite_cancellation(self):
@@ -135,20 +135,26 @@ class VoiceHTTPTests(unittest.TestCase):
             self.skipTest('Install bridge/requirements.txt to check the WebSocket transport')
         seen = {}
         def handler(connection):
-            value = json.loads(connection.recv()); seen.update(value)
+            combined = bytearray(); packets = 0
+            while True:
+                value = json.loads(connection.recv()); seen.update(value)
+                combined.extend(base64.b64decode(value['data'])); packets += 1
+                if value['is_final']: break
+            seen['combined'] = bytes(combined); seen['packets'] = packets
             connection.send(json.dumps(dict(task_id='unrelated', is_final=True, text='wrong')))
             connection.send(json.dumps(dict(task_id=value['task_id'], is_final=False, text='partial')))
             connection.send(json.dumps(dict(task_id=value['task_id'], is_final=True, text='final result')))
-        with serve(handler, '127.0.0.1', 0, subprotocols=['binary']) as server:
+        with serve(handler, '127.0.0.1', 0, subprotocols=['binary'], max_size=2**22) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
             try:
                 asr = DesktopASR(server.socket.getsockname()[1])
-                pcm = struct.pack('<f', .25) * 4000
+                pcm = struct.pack('<f', .25) * (16000 * 65)
                 self.assertEqual(asr.transcribe(pcm, 'task-protocol'), 'final result')
-                self.assertEqual(base64.b64decode(seen['data']), pcm)
+                self.assertEqual(seen['combined'], pcm)
+                self.assertGreater(seen['packets'], 4)
                 self.assertEqual(seen['source'], 'mic')
                 self.assertTrue(seen['is_final'])
-                self.assertEqual(seen['seg_overlap'], 0)
+                self.assertEqual(seen['seg_overlap'], 4)
             finally:
                 server.shutdown(); thread.join()
 

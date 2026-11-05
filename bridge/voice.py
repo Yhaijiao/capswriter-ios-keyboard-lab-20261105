@@ -12,7 +12,7 @@ import threading
 import time
 
 RATE = 16000
-MAX_SECONDS = 60
+MAX_SECONDS = 300
 MAX_AUDIO = RATE * MAX_SECONDS * 4
 
 
@@ -38,13 +38,20 @@ class DesktopASR:
 
     def transcribe(self, pcm, task_id):
         from websockets.sync.client import connect
-        request = dict(task_id=task_id, source='mic', data=base64.b64encode(pcm).decode('ascii'),
-                       is_final=True, time_start=time.time(), seg_duration=60.0,
-                       seg_overlap=0.0, context='', language='auto')
-        deadline = time.monotonic() + 120
+        # Feed the same 60s/4s overlapping segmentation used by the desktop mic.
+        # Sending all five minutes as one final packet would bypass server
+        # segmentation and silently hit the model's per-chunk duration limit.
+        packet_size = RATE * 4 * 15
+        packets = [pcm[i:i + packet_size] for i in range(0, len(pcm), packet_size)]
+        started = time.time()
+        deadline = time.monotonic() + 180
         with connect(f'ws://127.0.0.1:{self.port}', proxy=None, open_timeout=5,
                      close_timeout=2, max_size=2**20, subprotocols=['binary']) as connection:
-            connection.send(json.dumps(request))
+            for index, packet in enumerate(packets):
+                request = dict(task_id=task_id, source='mic', data=base64.b64encode(packet).decode('ascii'),
+                               is_final=index == len(packets) - 1, time_start=started,
+                               seg_duration=60.0, seg_overlap=4.0, context='', language='auto')
+                connection.send(json.dumps(request))
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -71,9 +78,9 @@ class VoiceRelay:
         age = self.clock() - self.job['created']
         state = self.job['state']
         if (state in ('pending', 'recording', 'stopping') and
-                (self.clock() - self.heartbeat > 8 or age > 75)):
+                (self.clock() - self.heartbeat > 8 or age > MAX_SECONDS + 15)):
             self.job.update(state='error', error='手机语音会话已断开或录音超时，请回主 App 重新开启。', text='')
-        if age > 240:
+        if age > MAX_SECONDS + 180:
             self.job = None
 
     def _public(self):
@@ -125,7 +132,7 @@ class VoiceRelay:
             if self.job and self.job['state'] in ('pending', 'recording', 'stopping', 'processing'):
                 raise VoiceError(409, '上一段录音仍在处理，请稍后。')
             self.job = dict(id=secrets.token_hex(16), state='pending', text='',
-                            error='', created=self.clock())
+                            error='', created=self.clock(), max_seconds=MAX_SECONDS)
             return self._public()
 
     def ack(self, job_id, agent_id):
@@ -170,7 +177,7 @@ class VoiceRelay:
                 raise VoiceError(400, 'Expected mono float32 little-endian audio at 16000Hz')
             encoded = value.get('audio')
             if not isinstance(encoded, str) or len(encoded) > (MAX_AUDIO * 4 // 3 + 8):
-                raise VoiceError(413, '录音最长 60 秒。')
+                raise VoiceError(413, '录音最长 5 分钟。')
             try:
                 pcm = base64.b64decode(encoded, validate=True)
                 if not RATE * 4 // 5 <= len(pcm) <= MAX_AUDIO or len(pcm) % 4:

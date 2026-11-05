@@ -21,8 +21,8 @@ def verify(path):
         assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         if any(name.endswith('pinyin-lexicon.json') for name in package.namelist()):
-            assert app.get('CFBundleShortVersionString') == '0.3.0', 'Unexpected app version'
-            assert extension.get('CFBundleShortVersionString') == '0.3.0', 'Unexpected keyboard version'
+            assert app.get('CFBundleShortVersionString') == '0.4.0', 'Unexpected app version'
+            assert extension.get('CFBundleShortVersionString') == '0.4.0', 'Unexpected keyboard version'
             assert app.get('NSMicrophoneUsageDescription')
             assert 'audio' in app.get('UIBackgroundModes', [])
             for bundle in (base, extbase):

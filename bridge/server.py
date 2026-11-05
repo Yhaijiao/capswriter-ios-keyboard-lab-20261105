@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, parse_qs
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine import DemoEngine, DesktopEngine
-from voice import VoiceRelay, DesktopASR, VoiceError
+from voice import VoiceRelay, DesktopASR, VoiceError, MAX_AUDIO
 
 MAX_BODY = 32768
 MAX_TEXT = 2000
@@ -77,7 +77,7 @@ def make_handler(engine, token, voice=None):
                 self.reply(415, {'error': 'JSON required'}); return
             try: length = int(self.headers.get('Content-Length', '-1'))
             except ValueError: length = -1
-            limit = 5200000 if self.path == '/v1/voice/audio' else MAX_BODY
+            limit = (MAX_AUDIO * 4 // 3 + MAX_BODY) if self.path == '/v1/voice/audio' else MAX_BODY
             if not 0 < length <= limit:
                 self.reply(413, {'error': 'Body length limit exceeded'}); return
             self.connection.settimeout(10)

@@ -42,11 +42,11 @@ jobs:
           ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app artifacts/Payload/CapsWriterLab.app
           test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterKeyboard.appex
           cd artifacts
-          zip -qr CapsWriterLab-0.3.0-unsigned.ipa Payload
-          shasum -a 256 CapsWriterLab-0.3.0-unsigned.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.0-unsigned.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.0-unsigned.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.3.0-unsigned.ipa
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.0-unsigned.ipa
       - name: Build simulator and take screenshot
         run: |
           set -o pipefail

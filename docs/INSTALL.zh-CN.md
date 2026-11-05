@@ -19,7 +19,7 @@
 
 ## 安装实验版
 
-1. 从构建产物中取出 `CapsWriterLab-0.2.0-unsigned.ipa`。
+1. 从构建产物中取出 `CapsWriterLab-0.4.0-unsigned.ipa`。
 2. 拖入 Sideloadly，选择手机，输入自己的免费 Apple 账号。
 3. 开启自动刷新选项。首次先用 USB，Wi-Fi 配对成功后再改无线刷新。
 4. 保留主 App 和键盘 `.appex` 扩展。若工具询问是否移除扩展，选择保留。

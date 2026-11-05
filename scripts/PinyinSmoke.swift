@@ -15,6 +15,17 @@ struct PinyinSmoke {
         precondition(fixture.candidates(for: "xing").count == 2)
         precondition(fixture.candidates(for: "xi").first?.consumed == 2)
         precondition(fixture.candidates(for: "").isEmpty)
-        print("Pinyin smoke: 8 checks passed; bundled keys: \(lexicon.count)")
+        precondition(engine.candidates(for: "wo").first == PinyinCandidate(text: "我", consumed: 2))
+        precondition(engine.candidates(for: "wom").first == PinyinCandidate(text: "我们", consumed: 3))
+        precondition(engine.candidates(for: "wome").first == PinyinCandidate(text: "我们", consumed: 4))
+        precondition(engine.candidates(for: "women").first == PinyinCandidate(text: "我们", consumed: 5))
+        precondition(engine.candidates(for: "WOM").first?.text == "我们")
+        let mixed = PinyinEngine(lexicon: ["wo": ["我"], "women": ["我们"], "zhongguo": ["中国"], "zhong": ["中"]])
+        precondition(mixed.candidates(for: "wom").first?.consumed == 3)
+        precondition(mixed.candidates(for: "zhongg").first == PinyinCandidate(text: "中国", consumed: 6))
+        precondition(mixed.candidates(for: "wog").first == PinyinCandidate(text: "我", consumed: 2))
+        precondition(mixed.candidates(for: "woaini").first?.consumed == 2)
+        precondition(mixed.candidates(for: String(repeating: "a", count: 65)).isEmpty)
+        print("Pinyin smoke: 18 checks passed; bundled keys: \(lexicon.count)")
     }
 }

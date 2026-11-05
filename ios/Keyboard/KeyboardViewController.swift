@@ -1,6 +1,10 @@
 import UIKit
 
-final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDelegate {
+private final class KeyboardPagingScrollView: UIScrollView {
+    override func touchesShouldCancel(in view: UIView) -> Bool { true }
+}
+
+final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDelegate, UIScrollViewDelegate {
     private enum Mode: Int { case voice, english, pinyin }
     private var mode: Mode = .voice
     private var shifted = false
@@ -8,10 +12,17 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     private var composition = ""
     private lazy var pinyin = PinyinEngine()
     private let content = UIStackView()
+    private let pager = KeyboardPagingScrollView()
+    private let pageStrip = UIStackView()
+    private weak var modeSelector: UISegmentedControl?
+    private var pageWidth: CGFloat = 0
+    private var centeringPages = false
+    private var changingPage = false
     private var heightConstraint: NSLayoutConstraint?
     private weak var globe: UIButton?
     private weak var feedback: UILabel?
     private weak var candidateRow: UIStackView?
+    private weak var candidateScroll: UIScrollView?
     private weak var compositionLabel: UILabel?
     private var previewedText: String?
     private var bridgeRequestID = UUID()
@@ -41,24 +52,28 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = Lab.background
-        heightConstraint = view.heightAnchor.constraint(equalToConstant: 318)
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: 384)
         heightConstraint?.priority = .defaultHigh; heightConstraint?.isActive = true
         content.axis = .vertical; content.spacing = 8
         content.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(content)
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -8),
+            content.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
             content.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             content.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
         ])
-        for direction: UISwipeGestureRecognizer.Direction in [.left, .right] {
-            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:)))
-            swipe.direction = direction; swipe.delegate = self; view.addGestureRecognizer(swipe)
-        }
         render()
     }
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews(); globe?.isHidden = !needsInputModeSwitchKey
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = pager.bounds.width
+        if width > 0 && abs(width - pageWidth) > 0.5 {
+            pageWidth = width
+            centeringPages = true; pager.setContentOffset(CGPoint(x: width, y: 0), animated: false); centeringPages = false
+        }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         var target = touch.view
@@ -68,11 +83,55 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         }
         return true
     }
-    @objc private func swiped(_ gesture: UISwipeGestureRecognizer) {
-        let delta = gesture.direction == .left ? 1 : 2
-        changeMode(Mode(rawValue: (mode.rawValue + delta) % 3) ?? .voice)
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: view)
+        return !changingPage && abs(velocity.x) > abs(velocity.y) * 1.2
+    }
+    @objc private func headerPanned(_ gesture: UIPanGestureRecognizer) {
+        guard pageWidth > 0, !changingPage else { return }
+        switch gesture.state {
+        case .began, .changed:
+            let offset = max(0, min(pageWidth * 2, pageWidth - gesture.translation(in: view).x))
+            pager.setContentOffset(CGPoint(x: offset, y: 0), animated: false)
+        case .ended, .cancelled:
+            let distance = pager.contentOffset.x - pageWidth
+            let velocity = gesture.velocity(in: view).x
+            var target = 1
+            if gesture.state == .ended && (abs(distance) > pageWidth * 0.22 || abs(velocity) > 350) {
+                target = abs(velocity) > 350 ? (velocity < 0 ? 2 : 0) : (distance > 0 ? 2 : 0)
+            }
+            animatePage(target)
+        default: break
+        }
     }
     private func changeMode(_ next: Mode) {
+        guard next != mode, !changingPage, !pager.isDragging, !pager.isDecelerating else {
+            modeSelector?.selectedSegmentIndex = mode.rawValue; return
+        }
+        animatePage((next.rawValue - mode.rawValue + 3) % 3 == 1 ? 2 : 0)
+    }
+    private func animatePage(_ index: Int) {
+        guard pageWidth > 0 else { return }
+        changingPage = true
+        if UIAccessibility.isReduceMotionEnabled {
+            pager.setContentOffset(CGPoint(x: CGFloat(index) * pageWidth, y: 0), animated: false)
+            finishPage()
+        } else { pager.setContentOffset(CGPoint(x: CGFloat(index) * pageWidth, y: 0), animated: true) }
+        // No scrolling animation callback is sent if the page is already centered.
+        if abs(pager.contentOffset.x - CGFloat(index) * pageWidth) < 0.5 && index == 1 { changingPage = false }
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { finishPage() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { finishPage() }
+    }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { finishPage() }
+    private func finishPage() {
+        guard !centeringPages, pageWidth > 0 else { return }
+        changingPage = false
+        let index = max(0, min(2, Int((pager.contentOffset.x / pageWidth).rounded())))
+        guard index != 1 else { modeSelector?.selectedSegmentIndex = mode.rawValue; return }
+        let next = Mode(rawValue: (mode.rawValue + (index == 2 ? 1 : 2)) % 3) ?? .voice
         if mode == .pinyin && next != .pinyin { commitComposition() }
         if mode == .voice && next != .voice && ["pending", "recording"].contains(voiceState) { cancelVoice() }
         mode = next; shifted = false; symbols = false; render()
@@ -88,31 +147,64 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         button.heightAnchor.constraint(equalToConstant: 39).isActive = true; return button
     }
     private func render() {
-        for item in content.arrangedSubviews { content.removeArrangedSubview(item); item.removeFromSuperview() }
-        heightConstraint?.constant = mode == .voice ? 318 : (mode == .pinyin ? 384 : 350)
+        if content.arrangedSubviews.isEmpty { buildChrome() }
+        centeringPages = true
+        for item in pageStrip.arrangedSubviews { pageStrip.removeArrangedSubview(item); item.removeFromSuperview() }
+        for (index, delta) in [2, 0, 1].enumerated() {
+            let pageMode = Mode(rawValue: (mode.rawValue + delta) % 3) ?? .voice
+            let page = UIStackView(); page.axis = .vertical; page.spacing = 8
+            page.isUserInteractionEnabled = index == 1; page.accessibilityElementsHidden = index != 1
+            if pageMode == .voice { renderVoice(content: page) } else { renderLetters(mode: pageMode, content: page) }
+            page.addArrangedSubview(UIView())
+            pageStrip.addArrangedSubview(page)
+            page.widthAnchor.constraint(equalTo: pager.frameLayoutGuide.widthAnchor).isActive = true
+        }
+        modeSelector?.selectedSegmentIndex = mode.rawValue
+        view.layoutIfNeeded(); pageWidth = pager.bounds.width
+        pager.setContentOffset(CGPoint(x: pageWidth, y: 0), animated: false)
+        centeringPages = false; updateCandidates(); updateVoice()
+    }
+    private func buildChrome() {
         let brand = Lab.label("◖ CapsWriter", size: 19); brand.font = .boldSystemFont(ofSize: 19)
         let selector = UISegmentedControl(items: ["波形", "EN", "拼"])
         selector.selectedSegmentIndex = mode.rawValue
+        modeSelector = selector
         selector.accessibilityIdentifier = "keyboard-mode-selector"
         selector.addAction(UIAction { [weak self, weak selector] _ in
             self?.changeMode(Mode(rawValue: selector?.selectedSegmentIndex ?? 0) ?? .voice)
         }, for: .valueChanged)
         selector.widthAnchor.constraint(equalToConstant: 142).isActive = true
         let header = row([brand, UIView(), selector], equal: false); header.alignment = .center
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(headerPanned(_:)))
+        pan.delegate = self; header.addGestureRecognizer(pan)
         content.addArrangedSubview(header)
-        if mode == .voice { renderVoice() } else { renderLetters() }
+        pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
+        pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true
+        pager.delaysContentTouches = false; pager.canCancelContentTouches = true
+        pager.contentInsetAdjustmentBehavior = .never; pager.clipsToBounds = true
+        pager.accessibilityIdentifier = "keyboard-pages"
+        pageStrip.axis = .horizontal; pageStrip.spacing = 0
+        pageStrip.translatesAutoresizingMaskIntoConstraints = false; pager.addSubview(pageStrip)
+        NSLayoutConstraint.activate([
+            pageStrip.topAnchor.constraint(equalTo: pager.contentLayoutGuide.topAnchor),
+            pageStrip.bottomAnchor.constraint(equalTo: pager.contentLayoutGuide.bottomAnchor),
+            pageStrip.leadingAnchor.constraint(equalTo: pager.contentLayoutGuide.leadingAnchor),
+            pageStrip.trailingAnchor.constraint(equalTo: pager.contentLayoutGuide.trailingAnchor),
+            pageStrip.heightAnchor.constraint(equalTo: pager.frameLayoutGuide.heightAnchor)
+        ])
+        content.addArrangedSubview(pager)
         let globe = key("", symbol: "globe") {}
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
         globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         globe.widthAnchor.constraint(equalToConstant: 45).isActive = true; self.globe = globe
-        let note = Lab.label(mode == .voice ? "手机录音 · 自己的电脑识别 · 左滑 EN / 拼" : "左滑切换：语音 → EN → 拼 → 语音", size: 10, color: Lab.muted)
+        let note = Lab.label("左右拖动切换：语音 / EN / 拼", size: 10, color: Lab.muted)
         note.textAlignment = .center; self.feedback = note
         let bridge = key("", symbol: "network") { [weak self] in self?.showBridge() }
         bridge.accessibilityLabel = "电脑热词连接设置"
         bridge.widthAnchor.constraint(equalToConstant: 45).isActive = true
         content.addArrangedSubview(row([globe, note, bridge], equal: false))
     }
-    private func renderVoice() {
+    private func renderVoice(content: UIStackView) {
         let spacer = UIView(); spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
         content.addArrangedSubview(spacer)
         let hint = Lab.label(voiceMessage, size: 14, color: Lab.muted)
@@ -194,7 +286,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     }
     private func pollVoice() {
         guard !voiceBusy, !voicePolling, let id = voiceID else { return }
-        if Date().timeIntervalSince(voiceStarted) > 210 { cancelVoice(); resetVoice("语音任务超时，请重试。"); return }
+        if Date().timeIntervalSince(voiceStarted) > Double(Lab.maxRecordingSeconds + 200) { cancelVoice(); resetVoice("语音任务超时，请重试。"); return }
         voicePolling = true; let revision = voiceRevision
         voiceCall("/v1/voice/result", jobID: id) { [weak self] result in
             guard let self = self, self.voiceID == id, self.voiceRevision == revision else { return }
@@ -209,7 +301,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
             voiceState = reply.state ?? "idle"
             switch voiceState {
             case "pending": voiceMessage = "正在启动手机录音，请稍候…"
-            case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 60 秒）"
+            case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 5 分钟）"
             case "stopping", "processing": voiceMessage = "正在电脑识别并应用当前热词…"
             case "done":
                 voiceTimer?.invalidate(); voiceTimer = nil
@@ -242,13 +334,14 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         if let id = voiceID { voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in } }
         resetVoice("录音已取消 · 点击重新开始")
     }
-    private func renderLetters() {
+    private func renderLetters(mode: Mode, content: UIStackView) {
         if mode == .pinyin {
             let label = Lab.label("输入拼音，点击候选字词", size: 13, color: Lab.muted)
             label.accessibilityIdentifier = "pinyin-composition"
             label.heightAnchor.constraint(equalToConstant: 18).isActive = true
             self.compositionLabel = label; content.addArrangedSubview(label)
             let scroll = UIScrollView(); scroll.tag = 901; scroll.showsHorizontalScrollIndicator = false
+            scroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = scroll
             scroll.heightAnchor.constraint(equalToConstant: 32).isActive = true
             let candidates = UIStackView(); candidates.axis = .horizontal; candidates.spacing = 8
             candidates.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(candidates)
@@ -290,7 +383,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
         number.widthAnchor.constraint(equalToConstant: 74).isActive = true
         let space = key(mode == .pinyin ? "空格 / 选字" : "space") { [weak self] in self?.space() }
         let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 74).isActive = true
-        content.addArrangedSubview(row([number, space, enter], equal: false)); updateCandidates()
+        content.addArrangedSubview(row([number, space, enter], equal: false))
     }
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
@@ -333,6 +426,7 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
             button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9)
             button.accessibilityIdentifier = "candidate-" + candidate.text; row.addArrangedSubview(button)
         }
+        candidateScroll?.setContentOffset(.zero, animated: false)
     }
     private func showBridge() {
         guard hasFullAccess else { feedback?.text = "电脑连接需在键盘设置开启“允许完全访问”"; return }
