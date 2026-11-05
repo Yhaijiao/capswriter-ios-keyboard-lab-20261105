@@ -113,13 +113,15 @@ final class KeyboardViewController: UIInputViewController, UIGestureRecognizerDe
     }
     private func animatePage(_ index: Int) {
         guard pageWidth > 0 else { return }
+        let destination = CGFloat(index) * pageWidth
+        if abs(pager.contentOffset.x - destination) < 0.5 {
+            finishPage(); return
+        }
         changingPage = true
         if UIAccessibility.isReduceMotionEnabled {
-            pager.setContentOffset(CGPoint(x: CGFloat(index) * pageWidth, y: 0), animated: false)
+            pager.setContentOffset(CGPoint(x: destination, y: 0), animated: false)
             finishPage()
-        } else { pager.setContentOffset(CGPoint(x: CGFloat(index) * pageWidth, y: 0), animated: true) }
-        // No scrolling animation callback is sent if the page is already centered.
-        if abs(pager.contentOffset.x - CGFloat(index) * pageWidth) < 0.5 && index == 1 { changingPage = false }
+        } else { pager.setContentOffset(CGPoint(x: destination, y: 0), animated: true) }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { finishPage() }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {

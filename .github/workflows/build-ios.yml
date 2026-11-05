@@ -47,6 +47,14 @@ jobs:
           rm -r Payload
       - name: Verify package
         run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.0-unsigned.ipa
+      - name: Upload install package before simulator tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: CapsWriterLab-IPA
+          path: |
+            artifacts/*.ipa
+            artifacts/SHA256SUMS.txt
+          retention-days: 14
       - name: Build simulator and take screenshot
         run: |
           set -o pipefail
@@ -63,7 +71,7 @@ jobs:
           echo "$DEVICE_ID" > build/simulator-device-id.txt
       - name: Exercise real keyboard in simulator
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: |
           set -o pipefail
           DEVICE_ID=$(cat build/simulator-device-id.txt)
@@ -84,7 +92,11 @@ jobs:
         with:
           name: CapsWriterLab-iPhone
           path: |
-            artifacts/*
+            artifacts/*.ipa
+            artifacts/SHA256SUMS.txt
+            artifacts/*.png
+            artifacts/*exit-code.txt
+            artifacts/keyboard-test-attachments/
             build-device.log
             build-simulator.log
             test-simulator.log
