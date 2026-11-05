@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.1.0"
+    static let version = "0.2.0"
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
     static let background = UIColor(red: 0.075, green: 0.075, blue: 0.085, alpha: 1)

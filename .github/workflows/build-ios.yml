@@ -19,6 +19,11 @@ jobs:
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+      - name: Test bundled offline pinyin
+        run: |
+          mkdir -p build
+          swiftc -parse-as-library ios/Shared/PinyinEngine.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
+          build/pinyin-smoke ios/Shared/pinyin-lexicon.json
       - name: Generate project
         run: |
           command -v xcodegen || brew install xcodegen
@@ -35,11 +40,11 @@ jobs:
           ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app artifacts/Payload/CapsWriterLab.app
           test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterKeyboard.appex
           cd artifacts
-          zip -qr CapsWriterLab-0.1.0-unsigned.ipa Payload
-          shasum -a 256 CapsWriterLab-0.1.0-unsigned.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.2.0-unsigned.ipa Payload
+          shasum -a 256 CapsWriterLab-0.2.0-unsigned.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.1.0-unsigned.ipa
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.2.0-unsigned.ipa
       - name: Build simulator and take screenshot
         run: |
           set -o pipefail
@@ -53,7 +58,25 @@ jobs:
           xcrun simctl launch "$DEVICE_ID" org.capswriterlab.keyboard
           sleep 3
           xcrun simctl io "$DEVICE_ID" screenshot artifacts/app-simulator.png
+          echo "$DEVICE_ID" > build/simulator-device-id.txt
+      - name: Exercise real keyboard in simulator
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(cat build/simulator-device-id.txt)
+          TEST_RESULT=0
+          xcodebuild test -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
+            -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath build/simulator -resultBundlePath artifacts/KeyboardSmokeTests.xcresult \
+            -parallel-testing-enabled NO -only-testing:KeyboardSmokeTests \
+            CODE_SIGNING_ALLOWED=NO | tee test-simulator.log || TEST_RESULT=$?
+          echo "$TEST_RESULT" > artifacts/simulator-ui-test-exit-code.txt
+          xcrun xcresulttool export attachments --path artifacts/KeyboardSmokeTests.xcresult \
+            --output-path artifacts/keyboard-test-attachments || true
+          xcrun simctl io "$DEVICE_ID" screenshot artifacts/after-ui-test.png || true
           xcrun simctl shutdown "$DEVICE_ID"
+          exit "$TEST_RESULT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -62,4 +85,5 @@ jobs:
             artifacts/*
             build-device.log
             build-simulator.log
+            test-simulator.log
           retention-days: 14
