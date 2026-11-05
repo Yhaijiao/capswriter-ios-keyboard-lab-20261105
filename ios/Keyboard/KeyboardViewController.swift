@@ -37,15 +37,18 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var voiceHint: UILabel?
     private weak var voiceButton: UIButton?
     private var voiceStarted = Date.distantPast
+    private var appeared = false
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        appeared = false
         voiceTimer?.invalidate(); voiceTimer = nil
         if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
         if ["pending", "recording"].contains(voiceState) { cancelVoice() }
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        appeared = true; globe?.isHidden = !needsInputModeSwitchKey
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
     }
 
@@ -65,7 +68,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         render()
     }
     override func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews(); globe?.isHidden = !needsInputModeSwitchKey
+        super.viewWillLayoutSubviews()
+        if appeared { globe?.isHidden = !needsInputModeSwitchKey }
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

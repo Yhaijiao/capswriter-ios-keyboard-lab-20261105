@@ -38,9 +38,18 @@ final class KeyboardSmokeTests: XCTestCase {
             if testButton.exists { break }
             dismissSystemTypingIntroduction(in: app, wait: false)
             let next = app.buttons["Next keyboard"].firstMatch
-            XCTAssertTrue(next.waitForExistence(timeout: 5), app.debugDescription)
-            next.tap()
-            if testButton.waitForExistence(timeout: 3) { break }
+            if next.waitForExistence(timeout: 5) {
+                next.tap()
+                if testButton.waitForExistence(timeout: 30) { break }
+            }
+            // On a cold shared runner, UIKit may take >40s to launch the
+            // extension and its first host connection can expire. Refocus the
+            // editor so the now-warm extension gets a fresh host connection.
+            if !app.keyboards.firstMatch.exists {
+                attach(app, name: "Cold extension connection retry")
+                editor.tap()
+                if testButton.waitForExistence(timeout: 15) { break }
+            }
         }
         XCTAssertTrue(testButton.waitForExistence(timeout: 10), app.debugDescription)
         testButton.tap()
