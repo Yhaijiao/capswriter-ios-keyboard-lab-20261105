@@ -10,11 +10,13 @@ final class PinyinEngine {
     private let lexicon: [String: [String]]
     private let keys: [String]
     private let longestKey: Int
+    private let costs: [String: [String: Double]]
     private struct Choice { let text: String; let score: Double }
     private let beamLimit = 16
 
-    init(lexicon: [String: [String]]) {
+    init(lexicon: [String: [String]], costs: [String: [String: Double]] = [:]) {
         self.lexicon = lexicon
+        self.costs = costs
         self.keys = lexicon.keys.sorted()
         self.longestKey = lexicon.keys.map(\.count).max() ?? 0
     }
@@ -30,7 +32,11 @@ final class PinyinEngine {
               let value = try? JSONDecoder().decode([String: [String]].self, from: data) else {
             self.init(lexicon: fallback); return
         }
-        self.init(lexicon: value)
+        var costs: [String: [String: Double]] = [:]
+        if let url = Bundle.main.url(forResource: "pinyin-costs", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([String: [String: Double]].self, from: data) { costs = decoded }
+        self.init(lexicon: value, costs: costs)
     }
 
     func candidates(for raw: String) -> [PinyinCandidate] {
@@ -44,7 +50,7 @@ final class PinyinEngine {
             // Preserve known whole-phrase completions: wom -> 我们 first.
             for key in matchingKeys(buffer).prefix(80) {
                 for (rank, text) in (lexicon[key] ?? []).prefix(8).enumerated() {
-                    complete.append(Choice(text: text, score: 0.75 + Double(key.count - letters.count) * 0.05 + Double(rank) * 0.18))
+                    complete.append(Choice(text: text, score: wordCost(key, text, rank) + 1 + Double(key.count - letters.count) * 0.7))
                 }
             }
         }
@@ -63,7 +69,7 @@ final class PinyinEngine {
                     guard let words = lexicon[spelling] else { continue }
                     for path in paths[start] {
                         for (rank, text) in words.prefix(8).enumerated() {
-                            paths[end].append(Choice(text: path.text + text, score: path.score + 1 + Double(rank) * 0.18))
+                            paths[end].append(Choice(text: path.text + text, score: path.score + wordCost(spelling, text, rank)))
                         }
                     }
                     paths[end] = ranked(paths[end], limit: beamLimit)
@@ -76,13 +82,13 @@ final class PinyinEngine {
                 var options: [Choice] = []
                 for key in matchingKeys(tail) where key.count <= 6 && key != tail {
                     for (rank, text) in (lexicon[key] ?? []).prefix(8).enumerated() where text.count == 1 {
-                        options.append(Choice(text: text, score: 1 + Double(key.count - tail.count) * 0.1 + Double(rank) * 0.18))
+                        options.append(Choice(text: text, score: wordCost(key, text, rank) + 1 + Double(key.count - tail.count) * 0.7))
                     }
                 }
                 let endings = ranked(options, limit: 64)
-                for (prefixRank, path) in paths[start].enumerated() {
+                for path in paths[start] {
                     for option in endings {
-                        complete.append(Choice(text: path.text + option.text, score: path.score + option.score + Double(prefixRank) * 0.8))
+                        complete.append(Choice(text: path.text + option.text, score: path.score + option.score))
                     }
                 }
             }
@@ -123,6 +129,10 @@ final class PinyinEngine {
             return left.score < right.score
         }
         return Array(ordered.prefix(limit))
+    }
+
+    private func wordCost(_ spelling: String, _ text: String, _ rank: Int) -> Double {
+        costs[spelling]?[text] ?? (1 + Double(rank) * 0.18)
     }
 
     private func matchingKeys(_ buffer: String) -> [String] {

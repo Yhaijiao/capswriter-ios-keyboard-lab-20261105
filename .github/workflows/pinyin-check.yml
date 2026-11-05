@@ -5,6 +5,7 @@ on:
     paths:
       - ios/Shared/PinyinEngine.swift
       - ios/Shared/pinyin-lexicon.json
+      - ios/Shared/pinyin-costs.json
       - scripts/PinyinSmoke.swift
       - .github/workflows/pinyin-check.yml
   workflow_dispatch:

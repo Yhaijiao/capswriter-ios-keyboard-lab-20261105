@@ -89,6 +89,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard next != mode, !changingPage, !pager.isDragging, !pager.isDecelerating else {
             modeSelector?.selectedSegmentIndex = mode.rawValue; return
         }
+        stopDeleting()
         animatePage((next.rawValue - mode.rawValue + 3) % 3 == 1 ? 2 : 0)
     }
     private func animatePage(_ index: Int) {
@@ -104,6 +105,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         } else { pager.setContentOffset(CGPoint(x: destination, y: 0), animated: true) }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { finishPage() }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { stopDeleting() }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate { finishPage() }
     }

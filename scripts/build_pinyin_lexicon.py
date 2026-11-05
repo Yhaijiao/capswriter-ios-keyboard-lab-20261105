@@ -6,6 +6,7 @@ import argparse
 from collections import defaultdict
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -16,7 +17,7 @@ SEEDS = {
     'nihao': ['你好'], 'xiexie': ['谢谢'], 'zaijian': ['再见'], 'shijie': ['世界'],
     'wo': ['我'], 'ni': ['你'], 'hao': ['好'], 'de': ['的'], 'shi': ['是'],
     'ceshi': ['测试'], 'zhongwen': ['中文'], 'shuru': ['输入'], 'shouji': ['手机'],
-    'jintian': ['今天'], 'mingtian': ['明天'], 'women': ['我们'],
+    'jintian': ['今天'], 'mingtian': ['明天'], 'women': ['我们'], 'nihaoma': ['你好吗'],
     'xianzai': ['现在'], 'keyi': ['可以'], 'zhongguo': ['中国'],
 }
 
@@ -47,6 +48,21 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(sorted(result.items())), ensure_ascii=False,
                                       separators=(',', ':')), encoding='utf-8')
+    frequencies = dict(rows)
+    total = sum(frequencies.values())
+    seeds = {word for words in SEEDS.values() for word in words}
+    costs = {}
+    for spelling, words in result.items():
+        costs[spelling] = {}
+        for word in words:
+            frequency = max(frequencies.get(word, 1), 100000 if word in seeds else 1)
+            reading_rank = 0
+            if len(word) == 1:
+                readings = [reading.replace('ü', 'v') for reading in pinyin(word, style=Style.NORMAL, heteronym=True)[0]]
+                if spelling in readings: reading_rank = readings.index(spelling)
+            costs[spelling][word] = round(math.log(total / frequency) + reading_rank * 2.5, 4)
+    costs_output = args.output.with_name('pinyin-costs.json')
+    costs_output.write_text(json.dumps(dict(sorted(costs.items())), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     print(json.dumps({'pinyin_keys': len(result), 'word_entries': sum(map(len, result.values())),
                       'output_bytes': args.output.stat().st_size,
                       'jieba_dict_sha256': hashlib.sha256(source).hexdigest()}, indent=2))

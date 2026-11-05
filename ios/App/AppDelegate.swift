@@ -57,7 +57,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let title = Lab.label("你的声音，\n从这里开始。", size: 34)
         title.font = .boldSystemFont(ofSize: 34)
         stack.addArrangedSubview(title)
-        stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n语音由手机采集，在自己的电脑识别。支持英文输入、基础离线拼音与三页滑动切换。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n语音由手机采集，在自己的电脑识别。支持英文输入、离线全拼组合与三页滑动切换。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("1  启用键盘", size: 21))
         stack.addArrangedSubview(Lab.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → CapsWriter Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.button("打开 App 设置", symbol: "gearshape") {

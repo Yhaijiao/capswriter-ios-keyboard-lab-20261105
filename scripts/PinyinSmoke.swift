@@ -8,7 +8,9 @@ struct PinyinSmoke {
     static func main() throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
         let lexicon = try JSONDecoder().decode([String: [String]].self, from: data)
-        let engine = PinyinEngine(lexicon: lexicon)
+        let costsURL = URL(fileURLWithPath: CommandLine.arguments[1]).deletingLastPathComponent().appendingPathComponent("pinyin-costs.json")
+        let costs = try JSONDecoder().decode([String: [String: Double]].self, from: Data(contentsOf: costsURL))
+        let engine = PinyinEngine(lexicon: lexicon, costs: costs)
         for input in ["wom", "nihaom", "nihaoma", "woaini", "womendouyouyigejia"] {
             let values = engine.candidates(for: input).map { "\($0.text):\($0.consumed)" }.joined(separator: ", ")
             FileHandle.standardError.write(Data("\(input): \(values)\n".utf8))
