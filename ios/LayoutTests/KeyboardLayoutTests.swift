@@ -50,7 +50,7 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(micFrame.maxX, root.bounds.width)
         // Reproduce the cold extension's size negotiation, not only a detached
         // screenshot at one fixed size. No page may scroll vertically.
-        for height in [CGFloat(324), 380, 324] {
+        for height in [CGFloat(272), 380, 272] {
             hostHeight.constant = height
             host.view.layoutIfNeeded(); root.layoutIfNeeded()
             XCTAssertEqual(pager.contentSize.height, pager.bounds.height, accuracy: 1)
@@ -59,6 +59,10 @@ final class KeyboardLayoutTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(inPager.minY, 0)
             XCTAssertLessThanOrEqual(inPager.maxY, pager.bounds.height, "Entire mic must be visible without vertical scrolling")
         }
+        let hotwords = views.first { $0.accessibilityIdentifier == "keyboard-hotwords" }!
+        let hotFrame = hotwords.convert(hotwords.bounds, to: pager)
+        XCTAssertGreaterThanOrEqual(hotFrame.minY, 0)
+        XCTAssertLessThanOrEqual(hotFrame.maxY, pager.bounds.height)
         let firstKeys = views.filter { $0.accessibilityIdentifier == "key-q" }
         let returns = views.filter { $0.accessibilityIdentifier == "keyboard-return" }
         XCTAssertEqual(firstKeys.count, 2, "English and pinyin pages must both be constructed")
@@ -83,6 +87,75 @@ final class KeyboardLayoutTests: XCTestCase {
         let attachment = XCTAttachment(image: image)
         attachment.name = "Fresh keyboard layout"; attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    @MainActor func testHotwordEditorUsesOwnTextAndUnicodeDelete() async {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let previousKeyWindow = scene?.windows.first { $0.isKeyWindow }
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: UIScreen.main.bounds)
+        let host = UIViewController(); host.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host; window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousKeyWindow?.makeKeyAndVisible() }
+        host.loadViewIfNeeded()
+        let controller = KeyboardViewController(); controller.loadViewIfNeeded()
+        host.addChild(controller)
+        let root = controller.view!; root.translatesAutoresizingMaskIntoConstraints = false
+        host.view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.topAnchor.constraint(equalTo: host.view.topAnchor),
+            root.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
+            root.heightAnchor.constraint(equalToConstant: 416)
+        ])
+        controller.didMove(toParent: host)
+        controller.showHotwordEditor(HotwordFile(id: "hot", name: "hot.txt", text: "开始\n🧑🏽‍💻", revision: "fixture", writable: true))
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        let editor = descendants(root).first { $0.accessibilityIdentifier == "hotword-editor-text" } as! UITextView
+        let delete = visibleButton("keyboard-delete", in: root)
+        delete.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "开始\n", "One delete removes the entire composed emoji")
+        for letter in "wom" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        visibleButton("candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "开始\n我们", "Pinyin selection edits the hotword draft")
+        visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "开始\n我们\n")
+        let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
+            root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Hotword editor with internal keyboard"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
+    @MainActor func testHotwordBrowserRespectsWritableFileFlag() {
+        let manager = HotwordManagerView(frame: CGRect(x: 0, y: 0, width: 430, height: 272))
+        let files = [HotwordFile(id: "hot", name: "hot.txt", text: "CapsWriter", revision: "a", writable: true),
+                     HotwordFile(id: "asr", name: "hot-server.txt", text: "演示", revision: "b", writable: false)]
+        var editedID: String?
+        manager.onEdit = { editedID = $0.id }
+        manager.show(files: files)
+        let edit = descendants(manager).first { $0.accessibilityIdentifier == "hotword-edit" } as! UIButton
+        XCTAssertTrue(edit.isEnabled)
+        edit.sendActions(for: .touchUpInside)
+        XCTAssertEqual(editedID, "hot")
+        manager.show(files: files, selectedID: "asr")
+        XCTAssertFalse(edit.isEnabled)
+        let content = descendants(manager).first { $0.accessibilityIdentifier == "hotword-file-content" } as! UITextView
+        XCTAssertEqual(content.text, "演示")
+        XCTAssertFalse(content.isEditable)
+    }
+
+    @MainActor private func visibleButton(_ identifier: String, in root: UIView) -> UIButton {
+        let match = descendants(root).first { view in
+            guard view.accessibilityIdentifier == identifier else { return false }
+            var current: UIView? = view
+            while let item = current {
+                if item.isHidden || item.accessibilityElementsHidden { return false }
+                current = item.superview
+            }
+            return true
+        }
+        XCTAssertNotNil(match, "Missing visible button: " + identifier)
+        return match as! UIButton
     }
 
     @MainActor private func descendants(_ view: UIView) -> [UIView] {
