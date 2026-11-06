@@ -653,16 +653,18 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let columns = 6
         let unitWidth = max(1, (view.bounds.width - 24) / CGFloat(columns))
         var buttons: [UIView] = []
+        var gridConstraints: [NSLayoutConstraint] = []
         var used = 0
         func finishRow() {
             guard !buttons.isEmpty else { return }
             if used < columns {
                 let spacer = UIView()
-                spacer.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(columns - used) / CGFloat(columns)).isActive = true
+                gridConstraints.append(spacer.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(columns - used) / CGFloat(columns)))
                 buttons.append(spacer)
             }
             let gridRow = row(buttons, equal: false); gridRow.spacing = 0
             candidateGridRows.addArrangedSubview(gridRow)
+            NSLayoutConstraint.activate(gridConstraints); gridConstraints = []
             let separator = UIView(); separator.backgroundColor = UIColor(white: 0.23, alpha: 1)
             separator.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
             candidateGridRows.addArrangedSubview(separator)
@@ -682,7 +684,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             button.titleLabel?.adjustsFontSizeToFitWidth = true
             button.titleLabel?.minimumScaleFactor = 0.85
             button.heightAnchor.constraint(equalToConstant: 44).isActive = true
-            button.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(span) / CGFloat(columns)).isActive = true
+            gridConstraints.append(button.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(span) / CGFloat(columns)))
             button.accessibilityIdentifier = "grid-candidate-" + candidate.text
             buttons.append(button); used += span
             if used == columns { finishRow() }
@@ -697,7 +699,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let selected = editor.selectedRange
         let location = min(selected.location, length)
         let range = NSRange(location: location, length: min(selected.length, length - location))
-        editor.textStorage.replaceCharacters(in: range, with: text)
+        editor.textStorage.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: [.font: editor.font ?? UIFont.systemFont(ofSize: 16), .foregroundColor: UIColor.white]))
         editor.selectedRange = NSRange(location: range.location + text.utf16.count, length: 0)
         editor.scrollRangeToVisible(editor.selectedRange)
     }
