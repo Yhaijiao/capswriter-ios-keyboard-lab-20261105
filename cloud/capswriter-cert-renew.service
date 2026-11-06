@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew CapsWriter short-lived IP TLS certificate
+[Service]
+Type=oneshot
+ExecStart=/srv/capswriter/venv-certbot/bin/certbot renew --quiet
+StandardOutput=null
+StandardError=journal
