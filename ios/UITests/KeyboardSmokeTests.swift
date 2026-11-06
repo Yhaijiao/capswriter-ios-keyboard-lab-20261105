@@ -16,15 +16,26 @@ final class KeyboardSmokeTests: XCTestCase {
         findAndTap(settings.staticTexts["General"].firstMatch, in: settings)
         findAndTap(settings.cells["Keyboard"].firstMatch, in: settings)
         findAndTap(settings.cells["KEYBOARDS"].firstMatch, in: settings)
-        findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
-        let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
-        findAndTap(thirdParty, in: settings)
+        let installed = settings.cells.matching(NSPredicate(format: "label CONTAINS %@", "CapsWriter Lab")).firstMatch
+        if !installed.exists {
+            findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
+            let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
+            findAndTap(thirdParty, in: settings)
+        }
         settings.terminate()
 
         let app = XCUIApplication()
+        app.terminate()
         app.launch()
         let editor = app.textViews["lab-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        // Cold shared runners can return from launch before the app has a
+        // foreground window (orientation 0, empty AX tree). Activate explicitly
+        // rather than treating that setup delay as a keyboard input failure.
+        if !editor.waitForExistence(timeout: 30) {
+            attach(app, name: "Main app activation retry")
+            app.activate()
+        }
+        XCTAssertTrue(editor.waitForExistence(timeout: 30), app.debugDescription)
         app.buttons["清空测试区"].firstMatch.tap()
         editor.tap()
         if !app.keyboards.firstMatch.waitForExistence(timeout: 15) {
