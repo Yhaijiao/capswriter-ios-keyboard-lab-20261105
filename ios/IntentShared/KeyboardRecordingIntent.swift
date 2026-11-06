@@ -17,7 +17,8 @@ struct StartKeyboardRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
         try await VoiceIntentCoordinator.shared.armFromIntent()
         return .result()
 #else
-        throw RecordingIntentError.wrongProcess
+        try RecordingIntentError.rejectExtensionExecution()
+        return .result()
 #endif
     }
 }
@@ -36,12 +37,14 @@ struct StopKeyboardRecordingIntent: AudioRecordingIntent, LiveActivityIntent {
         VoiceIntentCoordinator.shared.session.stop()
         return .result()
 #else
-        throw RecordingIntentError.wrongProcess
+        try RecordingIntentError.rejectExtensionExecution()
+        return .result()
 #endif
     }
 }
 
 enum RecordingIntentError: LocalizedError {
+    static func rejectExtensionExecution() throws { throw RecordingIntentError.wrongProcess }
     case wrongProcess, microphonePermission, liveActivityDisabled, invalidPairing, startFailed
     var errorDescription: String? {
         switch self {
