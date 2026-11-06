@@ -6,6 +6,8 @@ on:
       - ios/Shared/PinyinEngine.swift
       - ios/Shared/pinyin-lexicon.json
       - ios/Shared/pinyin-costs.json
+      - ios/Shared/pinyin-syllables.json
+      - ios/Shared/VoiceResultDelivery.swift
       - scripts/PinyinSmoke.swift
       - .github/workflows/pinyin-check.yml
   workflow_dispatch:
@@ -23,5 +25,5 @@ jobs:
       - name: Compile and exercise real Swift engine
         run: |
           mkdir -p build
-          swiftc -O -parse-as-library ios/Shared/PinyinEngine.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
+          swiftc -O -parse-as-library ios/Shared/PinyinEngine.swift ios/Shared/VoiceResultDelivery.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
           build/pinyin-smoke ios/Shared/pinyin-lexicon.json

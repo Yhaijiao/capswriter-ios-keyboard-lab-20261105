@@ -27,7 +27,7 @@ jobs:
       - name: Test bundled offline pinyin
         run: |
           mkdir -p build
-          swiftc -parse-as-library ios/Shared/PinyinEngine.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
+          swiftc -parse-as-library ios/Shared/PinyinEngine.swift ios/Shared/VoiceResultDelivery.swift scripts/PinyinSmoke.swift -o build/pinyin-smoke
           build/pinyin-smoke ios/Shared/pinyin-lexicon.json
       - name: Generate project
         run: |
@@ -45,11 +45,11 @@ jobs:
           ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app artifacts/Payload/CapsWriterLab.app
           test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterKeyboard.appex
           cd artifacts
-          zip -qr CapsWriterLab-0.4.2-unsigned.ipa Payload
-          shasum -a 256 CapsWriterLab-0.4.2-unsigned.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.3-unsigned.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.3-unsigned.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.2-unsigned.ipa 0.4.2
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.3-unsigned.ipa 0.4.3
       - name: Upload install package before simulator tests
         uses: actions/upload-artifact@v4
         with:

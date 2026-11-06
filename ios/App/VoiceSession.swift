@@ -168,7 +168,7 @@ final class VoiceSession {
             self.uploading = false
             switch result {
             case .success(let reply):
-                self.onStatus?(reply.state == "done" ? "识别完成，回到键盘预览并插入文字。\n语音会话仍开启，可继续录下一段。" : (reply.error ?? "录音已结束。"))
+                self.onStatus?(reply.state == "done" ? "识别完成，键盘会自动输入文字。\n语音会话仍开启，可继续录下一段。" : (reply.error ?? "录音已结束。"))
             case .failure(let error): self.stop(message: "提交失败：\(error.localizedDescription)")
             }
         }

@@ -93,7 +93,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.button("用电脑规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
-        stack.addArrangedSubview(Lab.label("先将配对配置交给键盘，并在键盘设置允许完全访问。\n选择会话时间。开启期间麦克风会持续工作，系统显示录音指示；只有在键盘点击开始、停止的片段会提交给电脑，待机声音丢弃。\n切回输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 插入文字。单段最长 5 分钟。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("先将配对配置交给键盘，并在键盘设置允许完全访问。\n选择会话时间。开启期间麦克风会持续工作，系统显示录音指示；只有在键盘点击开始、停止的片段会提交给电脑，待机声音丢弃。\n切回输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动输入文字。单段最长 5 分钟。", size: 15, color: Lab.muted))
         let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
         duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 0

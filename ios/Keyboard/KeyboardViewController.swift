@@ -30,7 +30,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var bridgeRequestID = UUID()
     private var voiceID: String?
     private var voiceState = "idle"
-    private var voiceText = ""
+    private var voiceDelivery = VoiceResultDelivery()
     private var voiceMessage = "Tap to speak"
     private var voiceTimer: Timer?
     private var voiceBusy = false
@@ -55,6 +55,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         appeared = true; globe?.isHidden = !needsInputModeSwitchKey
+        insertVoiceResultIfReady()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
     }
 
@@ -83,13 +84,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         layoutPages(center: width > 0 && abs(width - pageWidth) > 0.5)
     }
     private func layoutPages(center: Bool) {
-        let width = pager.bounds.width, height = pager.bounds.height
-        guard width > 0, height > 0 else { return }
-        // These are exactly three full-width pages. Establish their content size
-        // before centering; an offset set against a stale size can be clamped.
-        pageStrip.frame = CGRect(x: 0, y: 0, width: width * 3, height: height)
-        let size = CGSize(width: width * 3, height: height)
-        if pager.contentSize != size { pager.contentSize = size }
+        let width = pager.bounds.width
+        guard width > 0, pager.bounds.height > 0 else { return }
+        // The strip is constrained to the viewport height, including the cold
+        // extension's first resize. It cannot acquire vertical scroll content.
         pageStrip.layoutIfNeeded()
         pageWidth = width
         if center {
@@ -97,6 +95,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             pager.setContentOffset(CGPoint(x: width, y: 0), animated: false)
             centeringPages = false
         }
+        if pager.contentOffset.y != 0 { pager.contentOffset.y = 0 }
     }
     private func changeMode(_ next: Mode) {
         guard next != mode, !changingPage, !pager.isDragging, !pager.isDecelerating else {
@@ -213,13 +212,22 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         candidateHeader.isHidden = true; pinyinHeader = candidateHeader
         content.addArrangedSubview(candidateHeader)
         pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
+        pager.alwaysBounceVertical = false; pager.showsVerticalScrollIndicator = false
         pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true
         pager.delaysContentTouches = false; pager.canCancelContentTouches = true
         pager.contentInsetAdjustmentBehavior = .never; pager.clipsToBounds = true
         pager.accessibilityIdentifier = "keyboard-pages"
         pageStrip.axis = .horizontal; pageStrip.spacing = 0; pageStrip.distribution = .fillEqually
-        pageStrip.translatesAutoresizingMaskIntoConstraints = true; pageStrip.autoresizingMask = []
+        pageStrip.translatesAutoresizingMaskIntoConstraints = false
         pager.addSubview(pageStrip)
+        NSLayoutConstraint.activate([
+            pageStrip.topAnchor.constraint(equalTo: pager.contentLayoutGuide.topAnchor),
+            pageStrip.bottomAnchor.constraint(equalTo: pager.contentLayoutGuide.bottomAnchor),
+            pageStrip.leadingAnchor.constraint(equalTo: pager.contentLayoutGuide.leadingAnchor),
+            pageStrip.trailingAnchor.constraint(equalTo: pager.contentLayoutGuide.trailingAnchor),
+            pageStrip.widthAnchor.constraint(equalTo: pager.frameLayoutGuide.widthAnchor, multiplier: 3),
+            pageStrip.heightAnchor.constraint(equalTo: pager.frameLayoutGuide.heightAnchor)
+        ])
         content.addArrangedSubview(pager)
         let globe = key("", symbol: "globe") {}
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
@@ -234,7 +242,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func renderVoice(content: UIStackView) {
         let hint = Lab.label(voiceMessage, size: 14, color: Lab.muted)
-        hint.numberOfLines = 2
+        hint.numberOfLines = 1
+        hint.heightAnchor.constraint(equalToConstant: 22).isActive = true
         hint.lineBreakMode = .byTruncatingTail
         hint.textAlignment = .center; content.addArrangedSubview(hint)
         voiceHint = hint
@@ -265,12 +274,6 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func tapVoice() {
         guard hasFullAccess else { voiceMessage = "先在键盘设置允许完全访问，再在主 App 开启语音会话。"; updateVoice(); return }
         guard !voiceBusy else { return }
-        if voiceState == "done" {
-            guard !voiceText.isEmpty else { resetVoice("没有识别到文字，请重试。"); return }
-            textDocumentProxy.insertText(voiceText)
-            if let id = voiceID { voiceCall("/v1/voice/consume", value: ["id": id]) { _ in } }
-            resetVoice("已插入 · 点击麦克风录下一段"); return
-        }
         if voiceState == "recording", let id = voiceID {
             voiceRevision = UUID(); let revision = voiceRevision; voicePolling = false
             voiceBusy = true; voiceMessage = "正在结束录音…"; updateVoice()
@@ -293,7 +296,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             }
             self.voiceBusy = false
             if case .success(let reply) = result {
-                self.voiceID = reply.id; self.voiceStarted = Date(); self.scheduleVoicePoll()
+                self.voiceID = reply.id
+                if let id = reply.id { self.voiceDelivery.begin(id) }
+                self.voiceStarted = Date(); self.scheduleVoicePoll()
             }
             self.handleVoice(result)
         }
@@ -324,28 +329,41 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             case "stopping", "processing": voiceMessage = "正在电脑识别并应用当前热词…"
             case "done":
                 voiceTimer?.invalidate(); voiceTimer = nil
-                voiceText = reply.text ?? ""
-                voiceMessage = voiceText.isEmpty ? "没有识别到文字，点击重试。" : voiceText
-                if voiceText.isEmpty { resetVoice(voiceMessage) }
+                let text = reply.text ?? ""
+                if text.isEmpty { resetVoice("没有识别到文字，点击重试。") }
+                else if let id = voiceID {
+                    voiceDelivery.receive(id: id, text: text)
+                    voiceMessage = "识别完成"
+                    insertVoiceResultIfReady()
+                }
             case "error", "cancelled", "consumed": resetVoice(reply.error ?? "请重新开始录音。")
             default: break
             }
             updateVoice()
         }
     }
+    private func insertVoiceResultIfReady() {
+        // A completion arriving while the keyboard is hidden must wait for its
+        // host connection, and must never insert the same job twice.
+        guard let delivery = voiceDelivery.take(visible: appeared && viewIfLoaded?.window != nil) else { return }
+        commitComposition()
+        textDocumentProxy.insertText(delivery.text)
+        resetVoice("Tap to speak")
+        voiceCall("/v1/voice/consume", value: ["id": delivery.id]) { _ in }
+    }
     private func updateVoice() {
         voiceHint?.text = voiceMessage
         let recording = voiceState == "recording"
-        voiceButton?.configuration?.title = recording ? "停止" : (voiceState == "done" ? "插入文字" : "")
-        voiceButton?.configuration?.image = UIImage(systemName: recording ? "stop.fill" : (voiceState == "done" ? "text.badge.plus" : "mic.fill"))
-        voiceButton?.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: recording || voiceState == "done" ? 22 : 35)
-        voiceButton?.accessibilityLabel = recording ? "停止录音" : (voiceState == "done" ? "插入识别文字" : "开始真实语音输入")
+        voiceButton?.configuration?.title = recording ? "停止" : ""
+        voiceButton?.configuration?.image = UIImage(systemName: recording ? "stop.fill" : "mic.fill")
+        voiceButton?.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: recording ? 22 : 35)
+        voiceButton?.accessibilityLabel = recording ? "停止录音" : "开始真实语音输入"
         // Polling requests don't disable the stop button, so a tap is never silently lost.
         voiceButton?.isEnabled = !voiceBusy && !["pending", "stopping", "processing"].contains(voiceState)
     }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
-        voiceID = nil; voiceText = ""; voiceState = "idle"; voiceBusy = false
+        voiceID = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
         voiceRevision = UUID(); voicePolling = false
         voiceMessage = message; updateVoice()
     }

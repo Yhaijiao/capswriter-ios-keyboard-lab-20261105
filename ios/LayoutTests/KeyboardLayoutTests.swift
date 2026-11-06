@@ -25,11 +25,12 @@ final class KeyboardLayoutTests: XCTestCase {
         host.addChild(controller)
         root.translatesAutoresizingMaskIntoConstraints = false
         host.view.addSubview(root)
+        let hostHeight = root.heightAnchor.constraint(equalToConstant: 500)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
             root.topAnchor.constraint(equalTo: host.view.topAnchor),
-            root.heightAnchor.constraint(equalToConstant: 324)
+            hostHeight
         ])
         controller.didMove(toParent: host)
         host.view.setNeedsLayout(); host.view.layoutIfNeeded()
@@ -47,6 +48,17 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual(micFrame.midX, root.bounds.midX, accuracy: 1)
         XCTAssertGreaterThanOrEqual(micFrame.minX, 0)
         XCTAssertLessThanOrEqual(micFrame.maxX, root.bounds.width)
+        // Reproduce the cold extension's size negotiation, not only a detached
+        // screenshot at one fixed size. No page may scroll vertically.
+        for height in [CGFloat(324), 380, 324] {
+            hostHeight.constant = height
+            host.view.layoutIfNeeded(); root.layoutIfNeeded()
+            XCTAssertEqual(pager.contentSize.height, pager.bounds.height, accuracy: 1)
+            XCTAssertEqual(pager.contentOffset.y, 0, accuracy: 1)
+            let inPager = mic.convert(mic.bounds, to: pager)
+            XCTAssertGreaterThanOrEqual(inPager.minY, 0)
+            XCTAssertLessThanOrEqual(inPager.maxY, pager.bounds.height, "Entire mic must be visible without vertical scrolling")
+        }
         let firstKeys = views.filter { $0.accessibilityIdentifier == "key-q" }
         let returns = views.filter { $0.accessibilityIdentifier == "keyboard-return" }
         XCTAssertEqual(firstKeys.count, 2, "English and pinyin pages must both be constructed")

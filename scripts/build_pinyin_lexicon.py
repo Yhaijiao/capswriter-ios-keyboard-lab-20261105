@@ -77,6 +77,16 @@ def main():
                                       separators=(',', ':')), encoding='utf-8')
     costs_output = args.output.with_name('pinyin-costs.json')
     costs_output.write_text(json.dumps(dict(sorted(costs.items())), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    # Preserve syllable boundaries for full spelling mixed with initials.
+    patterns = defaultdict(list)
+    for spelling, words in result.items():
+        for word in words:
+            syllables = ([spelling] if len(word) == 1 else
+                         [part.replace('ü', 'v') for part in lazy_pinyin(word, style=Style.NORMAL)])
+            if ''.join(syllables) == spelling:
+                patterns["'".join(syllables)].append(word)
+    args.output.with_name('pinyin-syllables.json').write_text(
+        json.dumps(dict(sorted(patterns.items())), ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     print(json.dumps({'pinyin_keys': len(result), 'word_entries': sum(map(len, result.values())),
                       'output_bytes': args.output.stat().st_size,
                       'jieba_dict_sha256': hashlib.sha256(source).hexdigest()}, indent=2))

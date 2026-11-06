@@ -52,6 +52,9 @@ final class KeyboardSmokeTests: XCTestCase {
             }
         }
         XCTAssertTrue(testButton.waitForExistence(timeout: 10), app.debugDescription)
+        let pageBounds = app.scrollViews["keyboard-pages"].frame
+        XCTAssertGreaterThanOrEqual(testButton.frame.minY, pageBounds.minY)
+        XCTAssertLessThanOrEqual(testButton.frame.maxY, pageBounds.maxY)
         app.buttons["keyboard-return"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\n"))
         let voiceReturnBottom = app.buttons["keyboard-return"].frame.maxY
@@ -93,6 +96,13 @@ final class KeyboardSmokeTests: XCTestCase {
         attach(app, name: "Composed nihaom phrase")
         app.buttons["candidate-你好吗"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("你好我们你好吗"))
+        for (spelling, text) in [("wm", "我们"), ("nihm", "你好吗"), ("womxianz", "我们现在")] {
+            for letter in spelling { app.buttons["key-" + String(letter)].tap() }
+            let mixed = app.buttons["candidate-" + text]
+            XCTAssertTrue(mixed.waitForExistence(timeout: 5))
+            mixed.tap()
+            XCTAssertTrue((editor.value as? String ?? "").hasSuffix(text))
+        }
         attach(app, name: "Chinese pinyin keyboard")
         app.scrollViews["keyboard-pages"].swipeLeft()
         XCTAssertTrue(testButton.waitForExistence(timeout: 5))

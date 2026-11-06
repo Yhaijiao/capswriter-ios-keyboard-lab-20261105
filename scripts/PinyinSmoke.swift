@@ -10,8 +10,10 @@ struct PinyinSmoke {
         let lexicon = try JSONDecoder().decode([String: [String]].self, from: data)
         let costsURL = URL(fileURLWithPath: CommandLine.arguments[1]).deletingLastPathComponent().appendingPathComponent("pinyin-costs.json")
         let costs = try JSONDecoder().decode([String: [Double]].self, from: Data(contentsOf: costsURL))
-        let engine = PinyinEngine(lexicon: lexicon, costs: costs)
-        for input in ["wom", "nihaom", "nihaoma", "woaini", "womendouyouyigejia"] {
+        let syllablesURL = costsURL.deletingLastPathComponent().appendingPathComponent("pinyin-syllables.json")
+        let syllables = try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: syllablesURL))
+        let engine = PinyinEngine(lexicon: lexicon, costs: costs, syllables: syllables)
+        for input in ["wom", "wm", "nihaom", "nihm", "womxianz", "wmxianzai", "woaini", "womendouyouyigejia"] {
             let values = engine.candidates(for: input).map { "\($0.text):\($0.consumed)" }.joined(separator: ", ")
             FileHandle.standardError.write(Data("\(input): \(values)\n".utf8))
         }
@@ -47,7 +49,34 @@ struct PinyinSmoke {
         check(sentence.contains { $0.text == "我们都有一个家" && $0.consumed == 18 })
         check(sentence.contains { $0.text == "我们" && $0.consumed == 5 })
         check(engine.candidates(for: "wom").count <= 40)
-        print("Pinyin smoke: 28 checks passed; bundled keys: \(lexicon.count)")
+        check(engine.candidates(for: "wm").first == PinyinCandidate(text: "我们", consumed: 2))
+        check(engine.candidates(for: "WM").contains { $0.text == "我妈" && $0.consumed == 2 })
+        check(engine.candidates(for: "nihm").first == PinyinCandidate(text: "你好吗", consumed: 4))
+        check(engine.candidates(for: "womxianz").first == PinyinCandidate(text: "我们现在", consumed: 8))
+        check(engine.candidates(for: "wmxianzai").first?.text == "我们现在")
+        check(engine.candidates(for: "womxianz").contains { $0.text == "我们" && $0.consumed == 3 })
+        check(engine.candidates(for: "nihaom").count <= 40)
+        check(engine.candidates(for: "ni1").isEmpty)
+        var delivery = VoiceResultDelivery()
+        delivery.begin("job1")
+        delivery.receive(id: "stale", text: "不要插入")
+        check(delivery.take(visible: true) == nil)
+        delivery.receive(id: "job1", text: "自动上屏")
+        check(delivery.take(visible: false) == nil)
+        check(delivery.take(visible: true)?.text == "自动上屏")
+        delivery.receive(id: "job1", text: "重复结果")
+        check(delivery.take(visible: true) == nil)
+        delivery.begin("job2"); delivery.receive(id: "job2", text: "")
+        check(delivery.take(visible: true) == nil)
+        delivery.receive(id: "job2", text: "取消的结果"); delivery.reset()
+        check(delivery.take(visible: true) == nil)
+        delivery.begin("job3"); delivery.receive(id: "job3", text: "下一次录音")
+        check(delivery.take(visible: true)?.id == "job3")
+        let started = Date()
+        for input in ["womxianz", "nihm", "womendouyouyigejia", String(repeating: "w", count: 64)] {
+            check(engine.candidates(for: input).count <= 40)
+        }
+        print("Pinyin + voice delivery checks passed; bundled keys: \(lexicon.count); stress seconds: \(Date().timeIntervalSince(started))")
     }
 }
 
