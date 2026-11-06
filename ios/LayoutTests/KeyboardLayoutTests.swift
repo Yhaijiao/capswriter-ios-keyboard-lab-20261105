@@ -12,6 +12,14 @@ final class KeyboardLayoutTests: XCTestCase {
         root.frame = CGRect(x: 0, y: 0, width: 430, height: 324)
         root.setNeedsLayout(); root.layoutIfNeeded()
         let views = descendants(root)
+        let pager = views.first { $0.accessibilityIdentifier == "keyboard-pages" } as! UIScrollView
+        XCTAssertEqual(pager.contentSize.width, pager.bounds.width * 3, accuracy: 1)
+        XCTAssertEqual(pager.contentOffset.x, pager.bounds.width, accuracy: 1, "Initial page must be the center voice page")
+        let mic = views.first { $0.accessibilityIdentifier == "keyboard-voice-button" }!
+        let micFrame = mic.convert(mic.bounds, to: root)
+        XCTAssertEqual(micFrame.midX, root.bounds.midX, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(micFrame.minX, 0)
+        XCTAssertLessThanOrEqual(micFrame.maxX, root.bounds.width)
         let firstKeys = views.filter { $0.accessibilityIdentifier == "key-q" }
         let returns = views.filter { $0.accessibilityIdentifier == "keyboard-return" }
         XCTAssertEqual(firstKeys.count, 2, "English and pinyin pages must both be constructed")

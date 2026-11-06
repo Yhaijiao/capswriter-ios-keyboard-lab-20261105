@@ -80,9 +80,22 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let width = pager.bounds.width
-        if width > 0 && abs(width - pageWidth) > 0.5 {
-            pageWidth = width
-            centeringPages = true; pager.setContentOffset(CGPoint(x: width, y: 0), animated: false); centeringPages = false
+        layoutPages(center: width > 0 && abs(width - pageWidth) > 0.5)
+    }
+    private func layoutPages(center: Bool) {
+        let width = pager.bounds.width, height = pager.bounds.height
+        guard width > 0, height > 0 else { return }
+        // These are exactly three full-width pages. Establish their content size
+        // before centering; an offset set against a stale size can be clamped.
+        pageStrip.frame = CGRect(x: 0, y: 0, width: width * 3, height: height)
+        let size = CGSize(width: width * 3, height: height)
+        if pager.contentSize != size { pager.contentSize = size }
+        pageStrip.layoutIfNeeded()
+        pageWidth = width
+        if center {
+            centeringPages = true
+            pager.setContentOffset(CGPoint(x: width, y: 0), animated: false)
+            centeringPages = false
         }
     }
     private func changeMode(_ next: Mode) {
@@ -146,11 +159,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             page.addArrangedSubview(UIView())
             if pageMode == .voice { renderVoice(content: page) } else { renderLetters(mode: pageMode, content: page) }
             pageStrip.addArrangedSubview(page)
-            page.widthAnchor.constraint(equalTo: pager.frameLayoutGuide.widthAnchor).isActive = true
         }
         modeSelector?.selectedSegmentIndex = mode.rawValue
-        view.layoutIfNeeded(); pageWidth = pager.bounds.width
-        pager.setContentOffset(CGPoint(x: pageWidth, y: 0), animated: false)
+        view.layoutIfNeeded(); layoutPages(center: true)
         centeringPages = false; updateCandidates(); updateVoice()
     }
     private func buildChrome() {
@@ -196,15 +207,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         pager.delaysContentTouches = false; pager.canCancelContentTouches = true
         pager.contentInsetAdjustmentBehavior = .never; pager.clipsToBounds = true
         pager.accessibilityIdentifier = "keyboard-pages"
-        pageStrip.axis = .horizontal; pageStrip.spacing = 0
-        pageStrip.translatesAutoresizingMaskIntoConstraints = false; pager.addSubview(pageStrip)
-        NSLayoutConstraint.activate([
-            pageStrip.topAnchor.constraint(equalTo: pager.contentLayoutGuide.topAnchor),
-            pageStrip.bottomAnchor.constraint(equalTo: pager.contentLayoutGuide.bottomAnchor),
-            pageStrip.leadingAnchor.constraint(equalTo: pager.contentLayoutGuide.leadingAnchor),
-            pageStrip.trailingAnchor.constraint(equalTo: pager.contentLayoutGuide.trailingAnchor),
-            pageStrip.heightAnchor.constraint(equalTo: pager.frameLayoutGuide.heightAnchor)
-        ])
+        pageStrip.axis = .horizontal; pageStrip.spacing = 0; pageStrip.distribution = .fillEqually
+        pager.addSubview(pageStrip)
         content.addArrangedSubview(pager)
         let globe = key("", symbol: "globe") {}
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
