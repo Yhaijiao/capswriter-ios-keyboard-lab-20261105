@@ -1,3 +1,5 @@
+> 实验分支 0.4.6 / build19：公开录音 Intent 与实时活动的启动试验。尚未证明强退后的恢复或自动返回，不是稳定版。见 docs/VOICE-INTENT-EXPERIMENT.md。
+
 # CapsWriter Lab — 零年费 iPhone 键盘实验
 
 目标：在 iPhone 15 Pro Max / iOS 26.6.1 上验证第三方键盘安装、插入文字和免费签名续期。

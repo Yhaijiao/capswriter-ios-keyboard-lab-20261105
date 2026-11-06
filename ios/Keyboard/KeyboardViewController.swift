@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 
 private final class KeyboardPagingScrollView: UIScrollView {
     override func touchesShouldCancel(in view: UIView) -> Bool { true }
@@ -50,6 +51,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var hotSaving = false
     private var previewedText: String?
     private var bridgeRequestID = UUID()
+    private var intentControlHost: UIViewController?
+    private var intentWarmupID: UUID?
     private var voiceID: String?
     private var voiceState = "idle"
     private var voiceDelivery = VoiceResultDelivery()
@@ -823,7 +826,41 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if saved { voiceMessage = "热词已保存 · 点击开始录音" }
         updatePreferredHeight(); render()
     }
+    // Explicit experimental button only; normal keyboard behavior is unchanged.
+    private func beginIntentWarmup() {
+        guard hasFullAccess, voiceID == nil else { return }
+        let request = UUID(); intentWarmupID = request
+        voiceMessage = "正在尝试开启语音会话…"; updateVoice()
+        pollIntentWarmup(request, deadline: Date().addingTimeInterval(20))
+    }
+    private func pollIntentWarmup(_ request: UUID, deadline: Date) {
+        guard intentWarmupID == request else { return }
+        guard appeared, view.window != nil else { intentWarmupID = nil; removeIntentControl(); return }
+        guard Date() < deadline else {
+            intentWarmupID = nil; removeIntentControl(); voiceMessage = "实验未能开启会话，请回 Lab 开启。"; updateVoice(); return
+        }
+        BridgeClient.request(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
+                             token: UserDefaults.standard.string(forKey: "bridge.token") ?? "") { [weak self] result in
+            guard let self = self, self.intentWarmupID == request else { return }
+            if case .success(let reply) = result, reply.agent_ready == true {
+                self.intentWarmupID = nil
+                self.removeIntentControl()
+                self.tapVoice()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.pollIntentWarmup(request, deadline: deadline)
+            }
+        }
+    }
+    private func removeIntentControl() {
+        intentControlHost?.willMove(toParent: nil)
+        intentControlHost?.view.removeFromSuperview()
+        intentControlHost?.removeFromParent()
+        intentControlHost = nil
+    }
     private func showBridge() {
+        removeIntentControl()
         guard hasFullAccess else { feedback?.text = "电脑连接需在键盘设置开启“允许完全访问”"; return }
         if let panel = view.viewWithTag(700) { panel.removeFromSuperview(); return }
         previewedText = nil; bridgeRequestID = UUID()
@@ -873,9 +910,23 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             self.textDocumentProxy.insertText(text); panel?.removeFromSuperview()
         }
         let close = Lab.button("返回键盘") { [weak self, weak panel] in
-            self?.bridgeRequestID = UUID(); self?.previewedText = nil; panel?.removeFromSuperview()
+            self?.bridgeRequestID = UUID(); self?.previewedText = nil; panel?.removeFromSuperview(); self?.removeIntentControl()
         }
-        panel.addArrangedSubview(paste); panel.addArrangedSubview(run); panel.addArrangedSubview(result)
+        panel.addArrangedSubview(paste)
+        if #available(iOS 18.0, *) {
+            let host = UIHostingController(rootView: KeyboardVoiceIntentControl { [weak self, weak panel] in
+                DispatchQueue.main.async { [weak self, weak panel] in
+                    panel?.removeFromSuperview(); self?.beginIntentWarmup()
+                }
+            })
+            intentControlHost = host
+            addChild(host); host.view.backgroundColor = .clear
+            host.view.heightAnchor.constraint(equalToConstant: 40).isActive = true
+            panel.addArrangedSubview(row([run, host.view])); host.didMove(toParent: self)
+            // Keep the intent control alive while its system action is pending;
+            // bounded warm-up completion removes the temporary child controller.
+        } else { panel.addArrangedSubview(run) }
+        panel.addArrangedSubview(result)
         panel.addArrangedSubview(row([insert, close])); panel.addArrangedSubview(UIView())
     }
 }

@@ -26,7 +26,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
-    private let voice = VoiceSession()
+    private let voice = VoiceIntentCoordinator.shared.session
     private let automaticSession = UISwitch()
     private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()

@@ -1,4 +1,5 @@
 import AVFoundation
+import ActivityKit
 import UIKit
 
 // The containing app owns the microphone. No App Groups or private URL APIs.
@@ -6,6 +7,7 @@ import UIKit
 // Idle audio is discarded; only a keyboard-requested segment is held in memory.
 final class VoiceSession {
     var onStatus: ((String) -> Void)?
+    var onStopped: (() -> Void)?
     private(set) var active = false
     private(set) var starting = false
     private let audio = AVAudioEngine()
@@ -35,7 +37,7 @@ final class VoiceSession {
             name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     }
 
-    func start(address: String, token: String, sessionMinutes: Int = 10) {
+    func start(address: String, token: String, sessionMinutes: Int = 10, intentActivityID: String? = nil) {
         guard !active, !starting else { return }
         starting = true
         let request = UUID(); generation = request
@@ -57,7 +59,7 @@ final class VoiceSession {
                     return
                 }
                 if AVAudioApplication.shared.recordPermission == .granted {
-                    self.arm(address: address, token: token, sessionMinutes: sessionMinutes)
+                    self.arm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID)
                     return
                 }
                 if AVAudioApplication.shared.recordPermission == .denied {
@@ -72,17 +74,20 @@ final class VoiceSession {
                             self.starting = false
                             self.onStatus?("请在 App 设置中允许麦克风后重试。"); return
                         }
-                        self.arm(address: address, token: token, sessionMinutes: sessionMinutes)
+                        self.arm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID)
                     }
                 }
             }
         }
     }
 
-    private func arm(address: String, token: String, sessionMinutes: Int) {
+    private func arm(address: String, token: String, sessionMinutes: Int, intentActivityID: String?) {
         // Connection or permission callbacks can arrive after the user leaves
         // Lab. Complete a fresh microphone start while the app is visible.
-        guard UIApplication.shared.applicationState != .background else {
+        let validIntentActivity = intentActivityID.map { identifier in
+            Activity<RecordingActivityAttributes>.activities.contains { $0.id == identifier && $0.activityState == .active }
+        } ?? false
+        guard UIApplication.shared.applicationState != .background || validIntentActivity else {
             starting = false
             onStatus?("请回到 Lab 完成开启语音会话。")
             return
@@ -211,6 +216,7 @@ final class VoiceSession {
                               value: ["agent_id": agentID, "active": false]) { _ in }
         }
         onStatus?(message)
+        onStopped?()
     }
 
     @objc private func interrupted(_ notification: Notification) {
