@@ -651,32 +651,45 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             candidateGridRows.removeArrangedSubview(view); view.removeFromSuperview()
         }
         let columns = 6
-        for start in stride(from: 0, to: displayedCandidates.count, by: columns) {
-            var buttons: [UIView] = []
-            for candidate in displayedCandidates[start..<min(start + columns, displayedCandidates.count)] {
-                let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
-                button.configuration?.cornerStyle = .fixed
-                button.configuration?.background.cornerRadius = 0
-                button.configuration?.baseBackgroundColor = Lab.background
-                button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3)
-                button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
-                    var output = input; output.font = .systemFont(ofSize: 17); return output
-                }
-                button.titleLabel?.adjustsFontSizeToFitWidth = true
-                button.titleLabel?.minimumScaleFactor = 0.85
-                button.heightAnchor.constraint(equalToConstant: 44).isActive = true
-                button.accessibilityIdentifier = "grid-candidate-" + candidate.text
-                buttons.append(button)
+        let unitWidth = max(1, (view.bounds.width - 24) / CGFloat(columns))
+        var buttons: [UIView] = []
+        var used = 0
+        func finishRow() {
+            guard !buttons.isEmpty else { return }
+            if used < columns {
+                let spacer = UIView()
+                spacer.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(columns - used) / CGFloat(columns)).isActive = true
+                buttons.append(spacer)
             }
-            while buttons.count < columns { buttons.append(UIView()) }
-            let gridRow = row(buttons)
-            gridRow.spacing = 0
+            let gridRow = row(buttons, equal: false); gridRow.spacing = 0
             candidateGridRows.addArrangedSubview(gridRow)
             let separator = UIView(); separator.backgroundColor = UIColor(white: 0.23, alpha: 1)
             separator.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
             candidateGridRows.addArrangedSubview(separator)
+            buttons = []; used = 0
         }
+        for candidate in displayedCandidates {
+            let span = min(columns, max(1, Int(ceil((CGFloat(candidate.text.count) * 20 + 12) / unitWidth))))
+            if used + span > columns { finishRow() }
+            let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
+            button.configuration?.cornerStyle = .fixed
+            button.configuration?.background.cornerRadius = 0
+            button.configuration?.baseBackgroundColor = Lab.background
+            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3)
+            button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+                var output = input; output.font = .systemFont(ofSize: 20); return output
+            }
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.titleLabel?.minimumScaleFactor = 0.85
+            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            button.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(span) / CGFloat(columns)).isActive = true
+            button.accessibilityIdentifier = "grid-candidate-" + candidate.text
+            buttons.append(button); used += span
+            if used == columns { finishRow() }
+        }
+        finishRow()
     }
+
     private func insertText(_ text: String) {
         guard !hotSaving else { return }
         guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
