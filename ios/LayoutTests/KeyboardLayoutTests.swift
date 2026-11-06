@@ -115,7 +115,9 @@ final class KeyboardLayoutTests: XCTestCase {
         delete.sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n", "One delete removes the entire composed emoji")
         for letter in "wom" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
-        visibleButton("candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
+        visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        visibleButton("grid-candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n我们", "Pinyin selection edits the hotword draft")
         visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n我们\n")
@@ -129,6 +131,7 @@ final class KeyboardLayoutTests: XCTestCase {
         space.sendActions(for: .primaryActionTriggered)
         space.sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "我们。", "Composition commit counts as the first space tap")
+        XCTAssertEqual(editor.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor, UIColor.white)
         visibleButton("keyboard-number-toggle", in: root).sendActions(for: .primaryActionTriggered)
         visibleButton("key-1", in: root).sendActions(for: .primaryActionTriggered)
         visibleButton("keyboard-symbol-page", in: root).sendActions(for: .primaryActionTriggered)
