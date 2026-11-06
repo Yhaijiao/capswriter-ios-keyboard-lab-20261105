@@ -285,6 +285,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         guard !["pending", "stopping", "processing"].contains(voiceState) else { return }
         voiceRevision = UUID(); let revision = voiceRevision
+        let documentID = textDocumentProxy.documentIdentifier
         voiceBusy = true; voiceMessage = "正在连接语音会话…"; updateVoice()
         voiceCall("/v1/voice/start", value: [:]) { [weak self] result in
             guard let self = self else { return }
@@ -297,7 +298,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             self.voiceBusy = false
             if case .success(let reply) = result {
                 self.voiceID = reply.id
-                if let id = reply.id { self.voiceDelivery.begin(id) }
+                if let id = reply.id { self.voiceDelivery.begin(id, documentID: documentID) }
                 self.voiceStarted = Date(); self.scheduleVoicePoll()
             }
             self.handleVoice(result)
@@ -345,7 +346,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func insertVoiceResultIfReady() {
         // A completion arriving while the keyboard is hidden must wait for its
         // host connection, and must never insert the same job twice.
-        guard let delivery = voiceDelivery.take(visible: appeared && viewIfLoaded?.window != nil) else { return }
+        guard appeared, viewIfLoaded?.window != nil, voiceState == "done" else { return }
+        let documentID = textDocumentProxy.documentIdentifier
+        guard voiceDelivery.documentID == documentID else {
+            cancelVoice(); resetVoice("输入框已改变，请重新录音。"); return
+        }
+        guard let delivery = voiceDelivery.take(visible: true, documentID: documentID) else { return }
         commitComposition()
         textDocumentProxy.insertText(delivery.text)
         resetVoice("Tap to speak")
