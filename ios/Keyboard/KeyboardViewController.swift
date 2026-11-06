@@ -137,6 +137,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let row = UIStackView(arrangedSubviews: views); row.spacing = 5
         if equal { row.distribution = .fillEqually }; return row
     }
+    private func centeredRow(_ control: UIView) -> UIStackView {
+        let left = UIView(), right = UIView()
+        let result = row([left, control, right], equal: false)
+        left.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
+        return result
+    }
     private func key(_ title: String, symbol: String? = nil, action: @escaping () -> Void) -> UIButton {
         let button = Lab.button(title, symbol: symbol, action: action)
         button.configuration?.cornerStyle = .medium
@@ -241,15 +247,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         mic.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
         mic.heightAnchor.constraint(equalToConstant: 56).isActive = true
         voiceButton = mic; updateVoice()
-        let micRow = row([UIView(), mic, UIView()], equal: false); micRow.distribution = .equalCentering
-        content.addArrangedSubview(micRow)
+        content.addArrangedSubview(centeredRow(mic))
         content.addArrangedSubview(row([
             key("space") { [weak self] in self?.space() },
             key("@") { [weak self] in self?.input("@") }, deleteKey()
         ]))
         let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 152).isActive = true
-        let enterRow = row([UIView(), enter, UIView()], equal: false); enterRow.distribution = .equalCentering
-        content.addArrangedSubview(enterRow)
+        content.addArrangedSubview(centeredRow(enter))
     }
 
     private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,

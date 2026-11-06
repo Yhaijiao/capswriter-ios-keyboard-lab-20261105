@@ -2,7 +2,7 @@ import UIKit
 import XCTest
 
 final class KeyboardLayoutTests: XCTestCase {
-    @MainActor func testFreshKeyboardConstructionAndAlignedRows() {
+    @MainActor func testFreshKeyboardConstructionAndAlignedRows() async {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let previousKeyWindow = scene?.windows.first { $0.isKeyWindow }
         let window: UIWindow
@@ -34,6 +34,10 @@ final class KeyboardLayoutTests: XCTestCase {
         controller.didMove(toParent: host)
         host.view.setNeedsLayout(); host.view.layoutIfNeeded()
         root.setNeedsLayout(); root.layoutIfNeeded()
+        // Let the new window finish its appearance/display transaction before
+        // inspecting its rendered state and restoring the previous key window.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
         let views = descendants(root)
         let pager = views.first { $0.accessibilityIdentifier == "keyboard-pages" } as! UIScrollView
         XCTAssertEqual(pager.contentSize.width, pager.bounds.width * 3, accuracy: 1)
@@ -48,6 +52,11 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual(firstKeys.count, 2, "English and pinyin pages must both be constructed")
         XCTAssertEqual(returns.count, 3, "Voice and both text pages must be constructed")
         guard firstKeys.count == 2, returns.count == 3 else { return }
+        let voiceReturns = returns.filter { $0.bounds.width > 100 }
+        XCTAssertEqual(voiceReturns.count, 1)
+        if let voiceReturn = voiceReturns.first {
+            XCTAssertEqual(voiceReturn.convert(voiceReturn.bounds, to: root).midX, root.bounds.midX, accuracy: 1)
+        }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertEqual(firstKeys[1].convert(firstKeys[1].bounds, to: root).minY, firstTop, accuracy: 1)
@@ -56,8 +65,8 @@ final class KeyboardLayoutTests: XCTestCase {
             XCTAssertEqual(key.bounds.height, 44, accuracy: 1)
             XCTAssertEqual(key.convert(key.bounds, to: root).maxY, bottom, accuracy: 1)
         }
-        let image = UIGraphicsImageRenderer(size: root.bounds.size).image { context in
-            root.layer.render(in: context.cgContext)
+        let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
+            root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }
         let attachment = XCTAttachment(image: image)
         attachment.name = "Fresh keyboard layout"; attachment.lifetime = .keepAlways
