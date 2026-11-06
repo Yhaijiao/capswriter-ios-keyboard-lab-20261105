@@ -17,12 +17,13 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine import DemoEngine, DesktopEngine
 from voice import VoiceRelay, DesktopASR, VoiceError, MAX_AUDIO
+from hotwords import HotwordStore, HotwordError, MAX_HOT_BYTES
 
 MAX_BODY = 32768
 MAX_TEXT = 2000
 
 
-def make_handler(engine, token, voice=None):
+def make_handler(engine, token, voice=None, hotwords=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = 'CapsWriterLab/0.1'
         def log_message(self, *args):
@@ -55,6 +56,11 @@ def make_handler(engine, token, voice=None):
         def do_GET(self):
             if not self.authorized(): return
             parts = urlsplit(self.path)
+            if parts.path == '/v1/hotwords' and hotwords:
+                try: self.reply(200, hotwords.read())
+                except HotwordError as error: self.reply(error.status, {'error': str(error)})
+                except Exception: self.reply(503, {'error': '热词文件暂不可用。'})
+                return
             if parts.path == '/v1/voice/result' and voice:
                 try: self.reply(200, voice.result(parse_qs(parts.query).get('id', [''])[0]))
                 except VoiceError as error: self.reply(error.status, {'error': str(error)})
@@ -71,13 +77,14 @@ def make_handler(engine, token, voice=None):
             voice_paths = ('/v1/voice/agent', '/v1/voice/start', '/v1/voice/ack',
                            '/v1/voice/stop', '/v1/voice/cancel', '/v1/voice/consume', '/v1/voice/audio')
             is_voice = self.path in voice_paths and voice is not None
-            if self.path != '/v1/correct' and not is_voice:
+            is_hotwords = self.path == '/v1/hotwords/save' and hotwords is not None
+            if self.path != '/v1/correct' and not is_voice and not is_hotwords:
                 self.reply(404, {'error': 'Not found'}); return
             if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
                 self.reply(415, {'error': 'JSON required'}); return
             try: length = int(self.headers.get('Content-Length', '-1'))
             except ValueError: length = -1
-            limit = (MAX_AUDIO * 4 // 3 + MAX_BODY) if self.path == '/v1/voice/audio' else MAX_BODY
+            limit = (MAX_AUDIO * 4 // 3 + MAX_BODY) if self.path == '/v1/voice/audio' else (MAX_HOT_BYTES * 6 + MAX_BODY if is_hotwords else MAX_BODY)
             if not 0 < length <= limit:
                 self.reply(413, {'error': 'Body length limit exceeded'}); return
             self.connection.settimeout(10)
@@ -86,6 +93,12 @@ def make_handler(engine, token, voice=None):
                 if len(raw) != length: raise ValueError('Incomplete body')
                 value = json.loads(raw)
                 if not isinstance(value, dict): raise ValueError('Object required')
+                if is_hotwords:
+                    try:
+                        self.reply(200, hotwords.save(value.get('file_id'), value.get('revision'), value.get('text')))
+                    except HotwordError as error: self.reply(error.status, {'error': str(error)})
+                    except Exception: self.reply(503, {'error': '保存失败，原始词库已保留。'})
+                    return
                 if is_voice:
                     self.handle_voice(value); return
                 text = value.get('text') if isinstance(value, dict) else None
@@ -123,6 +136,8 @@ def main():
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--token-file', type=Path, help='Optional token file inside your private project folder')
     parser.add_argument('--asr-port', type=int, help='Enable voice via the existing loopback desktop ASR server, usually 6016')
+    parser.add_argument('--hotwords-state', type=Path, help='Private directory for hotword backups and temporary saves')
+    parser.add_argument('--enable-hotword-save', action='store_true', help='Explicitly allow saving only desktop hot.txt')
     args = parser.parse_args()
     if bool(args.desktop) == bool(args.demo): parser.error('Choose exactly one of --desktop or --demo')
     ip = ipaddress.ip_address(args.host)
@@ -138,7 +153,11 @@ def main():
             args.token_file.parent.mkdir(parents=True, exist_ok=True)
             args.token_file.write_text(token, encoding='utf-8')
     voice = VoiceRelay(engine, DesktopASR(args.asr_port)) if args.asr_port else None
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(engine, token, voice))
+    if args.enable_hotword_save and (not args.desktop or not args.hotwords_state):
+        parser.error('Hotword saving needs a desktop source and explicit private state directory')
+    hotwords = HotwordStore(args.desktop, args.hotwords_state, writable=args.enable_hotword_save,
+                           validate=engine.validate_hotwords) if args.desktop and args.hotwords_state else None
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(engine, token, voice, hotwords))
     server.daemon_threads = True
     print(f'CapsWriter Lab bridge: http://{args.host}:{args.port}', flush=True)
     print(f'Pairing token (keep local): {token}', flush=True)

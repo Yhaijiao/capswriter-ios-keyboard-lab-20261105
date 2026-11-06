@@ -33,7 +33,16 @@ enum Lab {
     }
 }
 
+struct HotwordFile: Decodable {
+    var id: String
+    var name: String
+    var text: String
+    var revision: String
+    var writable: Bool
+}
+
 struct BridgeReply: Decodable {
+    var hotword_files: [HotwordFile]?
     var version: String?
     var source_version: String?
     var engine: String?

@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 import types
+import uuid
 
 HOT_FILES = {
     'hot': 'hot.txt', 'aliases': 'hot-personal-aliases.txt',
@@ -89,23 +90,24 @@ class EngineResult:
 class DesktopEngine:
     mode = 'desktop-shared-hotword-source'
 
-    def __init__(self, root):
+    def __init__(self, root, *, snapshot=None):
         self.root = Path(root)
         self.lock = threading.RLock()
         self.fingerprint = None
         self._package_name = None
-        self.refresh()
+        self._instance_id = uuid.uuid4().hex
+        self.refresh(snapshot)
 
-    def refresh(self):
+    def refresh(self, snapshot=None):
         with self.lock:
-            snapshot = read_snapshot(self.root)
+            snapshot = read_snapshot(self.root) if snapshot is None else snapshot
             fingerprint = digest(snapshot)
             if fingerprint == self.fingerprint:
                 return
             settings = config_values(snapshot['config_client.py'])
             if settings['traditional_convert']:
                 raise ValueError('Traditional conversion is enabled; this prototype does not claim parity for it')
-            name = '_cw_mobile_' + fingerprint
+            name = '_cw_mobile_' + fingerprint + '_' + self._instance_id
             package = types.ModuleType(name)
             package.__path__ = []
             package.logger = logging.getLogger('capswriter-mobile-adapter')
@@ -174,6 +176,13 @@ class DesktopEngine:
             # ResultProcessor currently runs this unconditionally, even when hot_rule=False.
             text = self.rule.substitute(text)
             return EngineResult(text, self.version, self.source_version, self.mode, self.terms)
+
+    def validate_hotwords(self, text):
+        snapshot = read_snapshot(self.root)
+        snapshot[HOT_FILES['hot']] = text
+        candidate = DesktopEngine(self.root, snapshot=snapshot)
+        try: return candidate.terms
+        finally: self._remove_namespace(candidate._package_name)
 
     def status(self):
         with self.lock:
