@@ -1,0 +1,11 @@
+numpy==2.3.5
+websockets==16.0
+onnxruntime==1.23.2
+sherpa-onnx==1.13.8
+rich==14.2.0
+watchdog==6.0.0
+pypinyin==0.55.0
+soundfile==0.13.1
+srt==3.5.3
+colorama==0.4.6
+gguf @ git+https://github.com/ggml-org/llama.cpp.git@c1d0e7a004015f23bc0233470b747b596f29b264#subdirectory=gguf-py

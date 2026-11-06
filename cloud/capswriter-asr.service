@@ -1,0 +1,36 @@
+[Unit]
+Description=CapsWriter private headless ASR
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=2
+
+[Service]
+Type=simple
+User=capswriter
+Group=capswriter
+WorkingDirectory=/srv/capswriter/private/desktop
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OMP_NUM_THREADS=2
+Environment=LD_LIBRARY_PATH=/srv/capswriter/private/desktop/core/server/engines/llama/bin
+RuntimeDirectory=capswriter
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/bin/rm -f /run/capswriter/asr-ready.json
+ExecStart=/srv/capswriter/venv-asr/bin/python -B /srv/capswriter/app/cloud/runtime.py --private-root /srv/capswriter/private/desktop
+ExecStartPost=/srv/capswriter/venv-asr/bin/python -B /srv/capswriter/app/cloud/probe.py --private-root /srv/capswriter/private/desktop
+TimeoutStartSec=420
+TimeoutStopSec=20
+KillMode=control-group
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/run/capswriter /srv/capswriter/private/state
+ProtectHome=true
+StandardOutput=null
+StandardError=null
+MemoryMax=7G
+
+[Install]
+WantedBy=multi-user.target

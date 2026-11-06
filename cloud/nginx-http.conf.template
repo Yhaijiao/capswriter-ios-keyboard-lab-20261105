@@ -1,0 +1,8 @@
+server {
+    listen 80;
+    server_name __PUBLIC_IP__;
+    access_log off;
+    error_log /dev/null crit;
+    location ^~ /.well-known/acme-challenge/ { root /srv/capswriter/acme; }
+    location / { return 444; }
+}

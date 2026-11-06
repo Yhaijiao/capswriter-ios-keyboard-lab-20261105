@@ -1,0 +1,18 @@
+{
+  "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-east-2/index.csv",
+  "checked_date": "2026-11-06",
+  "effective_date": "2026-11-01",
+  "region": "us-east-2",
+  "instance_type": "m7i-flex.large",
+  "sku": "NF94DUQA29AU4W9G",
+  "operating_system": "Linux",
+  "tenancy": "Shared",
+  "capacity_status": "Used",
+  "term": "OnDemand",
+  "vcpu": 2,
+  "memory_gib": 8,
+  "instance_usd_per_hour": "0.0957600000",
+  "public_ipv4_usd_per_hour": "0.005",
+  "gp3_usd_per_gb_month": "0.08",
+  "assumptions": "One IPv4,30GBgp3,baselineIOPS/throughput; excludes tax,additional traffic,snapshots,other account resources. Credit eligibility is account-dependent."
+}
