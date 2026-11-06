@@ -168,6 +168,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let brand = Lab.label("◖ CapsWriter", size: 19); brand.font = .boldSystemFont(ofSize: 19)
         let selector = UISegmentedControl(items: ["", "EN", "拼"])
         selector.setImage(UIImage(systemName: "waveform"), forSegmentAt: 0)
+        selector.backgroundColor = UIColor(white: 0.13, alpha: 1)
+        selector.selectedSegmentTintColor = UIColor(white: 0.28, alpha: 1)
+        selector.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
+        selector.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
         selector.selectedSegmentIndex = mode.rawValue
         modeSelector = selector
         selector.accessibilityIdentifier = "keyboard-mode-selector"
@@ -208,6 +212,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         pager.contentInsetAdjustmentBehavior = .never; pager.clipsToBounds = true
         pager.accessibilityIdentifier = "keyboard-pages"
         pageStrip.axis = .horizontal; pageStrip.spacing = 0; pageStrip.distribution = .fillEqually
+        pageStrip.translatesAutoresizingMaskIntoConstraints = true; pageStrip.autoresizingMask = []
         pager.addSubview(pageStrip)
         content.addArrangedSubview(pager)
         let globe = key("", symbol: "globe") {}
