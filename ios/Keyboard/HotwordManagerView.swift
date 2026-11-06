@@ -95,7 +95,18 @@ final class HotwordManagerView: UIView {
         note.text = message ?? (file.writable ? "每行一个词，或：正确词 | 误识别。\n保存后更新电脑热词，下次识别生效。" : readOnly)
     }
 
-    func showError(_ message: String) { note.text = message }
+    func showLoading() {
+        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false
+        picker.configuration?.title = "正在读取词库…"
+        text.text = ""; note.text = "正在连接已配对的识别服务…"
+    }
+
+    func showError(_ message: String) {
+        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false
+        picker.configuration?.title = "读取失败"
+        text.text = message
+        note.text = "检查右上角连接设置，或点击重新加载。"
+    }
 
     private func compactButton(_ title: String, symbol: String? = nil, action: @escaping () -> Void) -> UIButton {
         let button = Lab.button(title, symbol: symbol, action: action)

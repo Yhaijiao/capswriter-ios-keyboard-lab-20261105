@@ -26,6 +26,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var candidateRow: UIStackView?
     private weak var candidateScroll: UIScrollView?
     private weak var compositionLabel: UILabel?
+    private let compositionViewport = UIScrollView()
+    private var lastSpaceAt = Date.distantPast
     private weak var expandCandidatesButton: UIButton?
     private let candidateGrid = UIScrollView()
     private let candidateGridRows = UIStackView()
@@ -223,10 +225,21 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
         normalHeader = header
         content.addArrangedSubview(header)
-        let composition = Lab.label("", size: 13, color: Lab.muted)
+        let composition = Lab.label("", size: 18, color: .white)
         composition.accessibilityIdentifier = "pinyin-composition"
-        composition.lineBreakMode = .byTruncatingMiddle
-        composition.widthAnchor.constraint(lessThanOrEqualToConstant: 70).isActive = true
+        composition.numberOfLines = 1
+        composition.lineBreakMode = .byClipping
+        composition.translatesAutoresizingMaskIntoConstraints = false
+        compositionViewport.addSubview(composition)
+        compositionViewport.showsHorizontalScrollIndicator = false
+        compositionViewport.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        NSLayoutConstraint.activate([
+            composition.leadingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.leadingAnchor),
+            composition.trailingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.trailingAnchor),
+            composition.topAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.topAnchor),
+            composition.bottomAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.bottomAnchor),
+            composition.heightAnchor.constraint(equalTo: compositionViewport.frameLayoutGuide.heightAnchor)
+        ])
         compositionLabel = composition
         let candidatesScroll = UIScrollView(); candidatesScroll.showsHorizontalScrollIndicator = false
         candidatesScroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = candidatesScroll
@@ -248,7 +261,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         expand.heightAnchor.constraint(equalToConstant: 30).isActive = true
         expand.accessibilityIdentifier = "pinyin-expand-candidates"
         expandCandidatesButton = expand
-        let candidateHeader = row([composition, candidatesScroll, expand], equal: false)
+        let candidateHeader = row([compositionViewport, candidatesScroll, expand], equal: false)
         let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 32)
         candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
         candidateHeader.isHidden = true; pinyinHeader = candidateHeader
@@ -275,7 +288,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         candidateGrid.accessibilityIdentifier = "pinyin-candidate-grid"
         candidateGrid.isHidden = true; candidateGrid.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(candidateGrid)
-        candidateGridRows.axis = .vertical; candidateGridRows.spacing = 5
+        candidateGridRows.axis = .vertical; candidateGridRows.spacing = 1
         candidateGridRows.translatesAutoresizingMaskIntoConstraints = false; candidateGrid.addSubview(candidateGridRows)
         NSLayoutConstraint.activate([
             candidateGrid.topAnchor.constraint(equalTo: pager.topAnchor),
@@ -397,7 +410,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             switch voiceState {
             case "pending": voiceMessage = "正在启动手机录音，请稍候…"
             case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 5 分钟）"
-            case "stopping", "processing": voiceMessage = "正在电脑识别并应用当前热词…"
+            case "stopping", "processing": voiceMessage = "正在识别语音，完成后自动上屏…"
             case "done":
                 voiceTimer?.invalidate(); voiceTimer = nil
                 let text = reply.text ?? ""
@@ -491,6 +504,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         number.widthAnchor.constraint(equalToConstant: 74).isActive = true
         let space = key(mode == .pinyin ? "拼" : "EN") { [weak self] in self?.space() }
         space.accessibilityLabel = "空格 / 选字"
+        space.accessibilityIdentifier = "keyboard-space"
         space.contentHorizontalAlignment = .trailing
         space.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
             var output = input; output.font = UIFont.systemFont(ofSize: 13); output.foregroundColor = Lab.muted; return output
@@ -510,13 +524,25 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func input(_ text: String) {
         guard !hotSaving else { return }
+        lastSpaceAt = .distantPast
         if mode == .pinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
             guard composition.count < 64 else { return }; composition += text; updateCandidates()
         } else { commitComposition(); insertText(text) }
     }
     private func space() {
         guard !hotSaving else { return }
-        if composition.isEmpty { insertText(" ") } else { commitComposition() }
+        if composition.isEmpty {
+            let context: String
+            if let editor = hotEditor {
+                context = String((editor.text as NSString).substring(to: min(editor.selectedRange.location, (editor.text as NSString).length)))
+            } else { context = textDocumentProxy.documentContextBeforeInput ?? "" }
+            let preceding = context.dropLast().last
+            if Date().timeIntervalSince(lastSpaceAt) < 0.4, context.hasSuffix(" "),
+               let preceding = preceding, preceding.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
+                deleteCharacter(); insertText(mode == .pinyin ? "。" : ". ")
+                lastSpaceAt = .distantPast
+            } else { insertText(" "); lastSpaceAt = Date() }
+        } else { commitComposition(); lastSpaceAt = .distantPast }
     }
     private func deleteCharacter() {
         guard !hotSaving else { return }
@@ -587,6 +613,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if !composing { setCandidatesExpanded(false) }
         guard mode == .pinyin else { displayedCandidates = []; return }
         compositionLabel?.text = composition
+        compositionViewport.layoutIfNeeded()
+        compositionViewport.setContentOffset(CGPoint(x: max(0, compositionViewport.contentSize.width - compositionViewport.bounds.width), y: 0), animated: false)
         guard let row = candidateRow else { return }
         for view in row.arrangedSubviews { row.removeArrangedSubview(view); view.removeFromSuperview() }
         displayedCandidates = pinyin.candidates(for: composition)
@@ -614,24 +642,31 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         for view in candidateGridRows.arrangedSubviews {
             candidateGridRows.removeArrangedSubview(view); view.removeFromSuperview()
         }
-        let columns = max(3, gridColumns)
+        let columns = 6
         for start in stride(from: 0, to: displayedCandidates.count, by: columns) {
             var buttons: [UIView] = []
             for candidate in displayedCandidates[start..<min(start + columns, displayedCandidates.count)] {
                 let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
-                button.configuration?.cornerStyle = .medium
+                button.configuration?.cornerStyle = .fixed
+                button.configuration?.background.cornerRadius = 0
+                button.configuration?.baseBackgroundColor = Lab.background
                 button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3)
                 button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
                     var output = input; output.font = .systemFont(ofSize: 17); return output
                 }
                 button.titleLabel?.adjustsFontSizeToFitWidth = true
-                button.titleLabel?.minimumScaleFactor = 0.6
+                button.titleLabel?.minimumScaleFactor = 0.85
                 button.heightAnchor.constraint(equalToConstant: 44).isActive = true
                 button.accessibilityIdentifier = "grid-candidate-" + candidate.text
                 buttons.append(button)
             }
             while buttons.count < columns { buttons.append(UIView()) }
-            candidateGridRows.addArrangedSubview(row(buttons))
+            let gridRow = row(buttons)
+            gridRow.spacing = 0
+            candidateGridRows.addArrangedSubview(gridRow)
+            let separator = UIView(); separator.backgroundColor = UIColor(white: 0.23, alpha: 1)
+            separator.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+            candidateGridRows.addArrangedSubview(separator)
         }
     }
     private func insertText(_ text: String) {
@@ -677,7 +712,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func loadHotwords(into manager: HotwordManagerView) {
         hotRequest = UUID(); let request = hotRequest
-        manager.showError("正在读取当前词库…")
+        manager.showLoading()
         voiceCall("/v1/hotwords") { [weak self, weak manager] result in
             guard let self = self, self.hotRequest == request, let manager = manager else { return }
             switch result {
@@ -792,7 +827,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             panel.topAnchor.constraint(equalTo: view.topAnchor), panel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             panel.trailingAnchor.constraint(equalTo: view.trailingAnchor), panel.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        let result = Lab.label("在主 App 复制配对配置，再回这里粘贴。", size: 12, color: Lab.muted)
+        let currentAddress = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
+        let result = Lab.label(currentAddress.isEmpty ? "尚未配对。在主 App 复制配对配置，再回这里粘贴。" : "当前服务：\(currentAddress)\n可在主 App 复制新配置后粘贴。", size: 12, color: Lab.muted)
         let paste = Lab.button("粘贴配对配置", symbol: "doc.on.clipboard") { [weak result] in
             guard let raw = UIPasteboard.general.string, raw.hasPrefix("cwlab:v1:"),
                   let data = String(raw.dropFirst(9)).data(using: .utf8),

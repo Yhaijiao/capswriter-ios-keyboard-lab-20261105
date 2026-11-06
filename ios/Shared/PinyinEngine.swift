@@ -16,22 +16,33 @@ final class PinyinEngine {
     private struct Visit: Hashable { let node: ObjectIdentifier; let offset: Int }
     private let root = Node()
     private let beamLimit = 16
+    private var exactSpellings: Set<String> = []
 
     init(lexicon: [String: [String]], costs: [String: [Double]] = [:], syllables: [String: [String]] = [:]) {
-        let patterns = syllables.isEmpty ? lexicon : syllables
+        var patterns = syllables.isEmpty ? lexicon : syllables
+        // Public everyday phrases absent from the small bundled dictionary.
+        let supplements = ["shu'nv": ["淑女", "熟女"], "kong'ge": ["空格"],
+                           "shuang'ji": ["双击"], "ju'hao": ["句号"]]
+        for (pattern, words) in supplements {
+            patterns[pattern] = words + (patterns[pattern] ?? []).filter { !words.contains($0) }
+        }
         for (pattern, words) in patterns {
             let parts = pattern.split(separator: "'").map(String.init)
             guard !parts.isEmpty else { continue }
             let spelling = parts.joined()
+            exactSpellings.insert(spelling)
             var node = root
             for part in parts {
                 if node.children[part] == nil { node.children[part] = Node() }
                 node = node.children[part]!
             }
             for text in words {
-                let rank = lexicon[spelling]?.firstIndex(of: text) ?? 0
-                let cost = costs[spelling].flatMap { $0.indices.contains(rank) ? $0[rank] : nil }
-                    ?? (1 + Double(rank) * 0.18)
+                let rank = supplements[pattern]?.firstIndex(of: text) ?? lexicon[spelling]?.firstIndex(of: text) ?? 0
+                var cost = costs[spelling].flatMap { $0.indices.contains(rank) ? $0[rank] : nil }
+                    ?? ((supplements[pattern] == nil ? 1 : 9) + Double(rank) * 0.18)
+                // Keep this common family phrase discoverable for wm/wom even
+                // when the small corpus underestimates its standalone frequency.
+                if text == "我妈" { cost = min(cost, 7.5) }
                 node.words.append(Word(text: text, cost: cost, rank: rank))
             }
         }
@@ -65,10 +76,12 @@ final class PinyinEngine {
         var paths = Array(repeating: [Choice](), count: letters.count + 1)
         paths[0] = [Choice(text: "", score: 0)]
         var prefixes: [Int: [Choice]] = [:]
+        var matchesByStart: [Int: [Int: [Choice]]] = [:]
         for start in 0..<letters.count {
             paths[start] = ranked(paths[start], limit: beamLimit)
             guard !paths[start].isEmpty else { continue }
             let matches = matching(letters, from: start, consonantsOnly: consonantsOnly)
+            matchesByStart[start] = matches
             if start == 0 { prefixes = matches }
             for (end, options) in matches {
                 for path in paths[start] {
@@ -79,15 +92,52 @@ final class PinyinEngine {
                 paths[end] = ranked(paths[end], limit: beamLimit * 2)
             }
         }
-        var result = ranked(paths[letters.count], limit: 32).map { PinyinCandidate(text: $0.text, consumed: letters.count) }
-        // Selecting a mixed prefix leaves exactly the unselected keystrokes.
-        for end in prefixes.keys.sorted(by: >) where end < letters.count {
-            for choice in ranked(prefixes[end] ?? [], limit: 8) {
-                if !result.contains(where: { $0.text == choice.text }) {
-                    result.append(PinyinCandidate(text: choice.text, consumed: end))
-                }
-                if result.count >= 40 { return result }
+        var result: [PinyinCandidate] = []
+        func append(_ choices: [Choice], consumed: Int, limit: Int) {
+            guard limit > 0 else { return }
+            var added = 0
+            for choice in choices where !result.contains(where: { $0.text == choice.text }) {
+                result.append(PinyinCandidate(text: choice.text, consumed: consumed)); added += 1
+                if added >= limit || result.count >= 40 { break }
             }
+        }
+        // Real dictionary matches come first. Fully spelled words need no
+        // arbitrary combinations; mixed spelling still gets a few sentence guesses.
+        append(ranked(prefixes[letters.count] ?? [], limit: 6), consumed: letters.count, limit: 6)
+        if result.count < 6 && (!exactSpellings.contains(buffer) || result.isEmpty) {
+            append(ranked(paths[letters.count], limit: 16), consumed: letters.count, limit: 6 - result.count)
+        }
+        // A small number of useful phrase prefixes, then ample single characters.
+        var phrasePrefixes = 0
+        for end in prefixes.keys.sorted(by: >) where end < letters.count {
+            guard phrasePrefixes < 2 else { break }
+            let choices = ranked((prefixes[end] ?? []).filter { $0.text.count > 1 }, limit: 2 - phrasePrefixes)
+            let before = result.count
+            append(choices, consumed: end, limit: 2 - phrasePrefixes)
+            phrasePrefixes += result.count - before
+        }
+        // shu + nv offers 书/数/输, consuming exactly shu and leaving nv.
+        // shun + v is rejected because the remaining v cannot form a syllable.
+        let singleOrder = ["shu": Array("书数输树熟属叔舒鼠淑术梳束署竖薯蜀暑疏漱述殊恕蔬孰墅曙").map(String.init),
+                           "ji": Array("几及即机记级极急己计击集技寄鸡基际季济纪挤剂疾肌祭积迹寂继").map(String.init)]
+        var exactSingles: [(Int, [Choice])] = []
+        for (syllable, node) in root.children {
+            let chars = Array(syllable), end = chars.count
+            guard end <= letters.count, Array(letters.prefix(end)) == chars,
+                  end == letters.count || !(matchesByStart[end] ?? [:]).isEmpty else { continue }
+            let singles = node.words.filter { $0.text.count == 1 }.map { word -> Choice in
+                let rank = singleOrder[syllable]?.firstIndex(of: word.text)
+                return Choice(text: word.text, score: rank.map { Double($0) * 0.01 } ?? word.cost)
+            }
+            if !singles.isEmpty { exactSingles.append((end, ranked(singles, limit: 40))) }
+        }
+        for (end, choices) in exactSingles.sorted(by: { $0.0 > $1.0 }) {
+            guard result.count < 40 else { break }
+            append(choices, consumed: end, limit: 40 - result.count)
+        }
+        // Initial-only typing also needs single-character alternatives.
+        for end in prefixes.keys.sorted(by: >) where end < letters.count && result.count < 40 {
+            append(ranked((prefixes[end] ?? []).filter { $0.text.count == 1 }, limit: 40), consumed: end, limit: 40 - result.count)
         }
         return result
     }

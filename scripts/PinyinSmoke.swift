@@ -56,6 +56,18 @@ struct PinyinSmoke {
         check(engine.candidates(for: "wmxianzai").first?.text == "我们现在")
         check(engine.candidates(for: "womxianz").contains { $0.text == "我们" && $0.consumed == 3 })
         check(engine.candidates(for: "nihaom").count <= 40)
+        let shunv = engine.candidates(for: "shunv")
+        check(shunv.first == PinyinCandidate(text: "淑女", consumed: 5))
+        check(shunv.contains { $0.text == "熟女" && $0.consumed == 5 })
+        check(!shunv.contains { ["属女", "书女", "数女"].contains($0.text) })
+        check(shunv.prefix(18).filter { $0.text.count == 1 && $0.consumed == 3 }.count >= 12)
+        for character in ["书", "数", "输", "树", "属", "熟", "舒", "叔"] {
+            check(shunv.contains { $0.text == character && $0.consumed == 3 })
+        }
+        check(engine.candidates(for: "shu").count >= 20)
+        check(engine.candidates(for: "jikongge").contains { $0.text == "击" && $0.consumed == 2 })
+        check(engine.candidates(for: "kongge").first?.text == "空格")
+        check(engine.candidates(for: "shuangjikongge").first?.text == "双击空格")
         check(engine.candidates(for: "ni1").isEmpty)
         var delivery = VoiceResultDelivery()
         let documentID = UUID()

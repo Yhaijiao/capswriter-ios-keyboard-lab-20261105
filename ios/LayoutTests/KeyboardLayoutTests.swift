@@ -119,6 +119,11 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual(editor.text, "开始\n我们", "Pinyin selection edits the hotword draft")
         visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n我们\n")
+        editor.text = "测试"; editor.selectedRange = NSRange(location: 2, length: 0)
+        let space = visibleButton("keyboard-space", in: root)
+        space.sendActions(for: .primaryActionTriggered)
+        space.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "测试。", "Double space adds a Chinese sentence stop")
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }

@@ -41,6 +41,15 @@ def configure(private_root):
     config.Qwen3ASRGGUFArgs.model_dir = str(model_root)
     config.Qwen3ASRGGUFArgs.onnx_provider = 'CPU'; config.Qwen3ASRGGUFArgs.llm_use_gpu = False
     config.Qwen3ASRGGUFArgs.verbose = False
+    threads = int(os.environ.get('CAPSWRITER_LLM_THREADS', '1'))
+    if threads not in (1, 2): raise ValueError('Trial supports one or two decoder threads')
+    from core.server.engines.qwen_asr_gguf.inference import llama as native
+    original_init = native.LlamaContext.__init__
+    def context_init(self, *args, **kwargs):
+        kwargs.setdefault('n_threads', threads)
+        kwargs.setdefault('n_threads_batch', 2)
+        original_init(self, *args, **kwargs)
+    native.LlamaContext.__init__ = context_init
     return config
 
 

@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.4.4"
+    static let version = "0.4.5"
     static let maxRecordingSeconds = 300
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
