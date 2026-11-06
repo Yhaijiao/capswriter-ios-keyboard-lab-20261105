@@ -3,13 +3,36 @@ import XCTest
 
 final class KeyboardLayoutTests: XCTestCase {
     @MainActor func testFreshKeyboardConstructionAndAlignedRows() {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let previousKeyWindow = scene?.windows.first { $0.isKeyWindow }
+        let window: UIWindow
+        if let scene = scene { window = UIWindow(windowScene: scene) }
+        else { window = UIWindow(frame: UIScreen.main.bounds) }
+        let host = UIViewController()
+        host.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousKeyWindow?.makeKeyAndVisible() }
+        host.loadViewIfNeeded()
         let controller = KeyboardViewController()
         // This exercises the production UIKit code, including all three pages.
         // Activating constraints between unattached keys crashes at this point.
         controller.loadViewIfNeeded()
         let root = controller.view!
         root.overrideUserInterfaceStyle = .dark
-        root.frame = CGRect(x: 0, y: 0, width: 430, height: 324)
+        // Host the controller so UIKit invokes its layout lifecycle. A detached
+        // view's layoutIfNeeded does not invoke viewDidLayoutSubviews reliably.
+        host.addChild(controller)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        host.view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
+            root.topAnchor.constraint(equalTo: host.view.topAnchor),
+            root.heightAnchor.constraint(equalToConstant: 324)
+        ])
+        controller.didMove(toParent: host)
+        host.view.setNeedsLayout(); host.view.layoutIfNeeded()
         root.setNeedsLayout(); root.layoutIfNeeded()
         let views = descendants(root)
         let pager = views.first { $0.accessibilityIdentifier == "keyboard-pages" } as! UIScrollView
