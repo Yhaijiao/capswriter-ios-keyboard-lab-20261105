@@ -2,8 +2,9 @@ import Foundation
 
 @main
 struct PinyinSmoke {
+    static var failures: [UInt] = []
     static func check(_ value: @autoclosure () -> Bool, line: UInt = #line) {
-        if !value() { fatalError("Pinyin smoke failed at line \(line)") }
+        if !value() { failures.append(line); FileHandle.standardError.write(Data("Pinyin check failed at line \(line)\n".utf8)) }
     }
     static func main() throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
@@ -13,7 +14,7 @@ struct PinyinSmoke {
         let syllablesURL = costsURL.deletingLastPathComponent().appendingPathComponent("pinyin-syllables.json")
         let syllables = try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: syllablesURL))
         let engine = PinyinEngine(lexicon: lexicon, costs: costs, syllables: syllables)
-        for input in ["wom", "wm", "nihaom", "nihm", "womxianz", "wmxianzai", "woaini", "womendouyouyigejia"] {
+        for input in ["shunv", "shu", "jikongge", "shuangjikongge", "wom", "wm", "nihaom", "nihm", "womxianz", "wmxianzai", "woaini", "womendouyouyigejia"] {
             let values = engine.candidates(for: input).map { "\($0.text):\($0.consumed)" }.joined(separator: ", ")
             FileHandle.standardError.write(Data("\(input): \(values)\n".utf8))
         }
@@ -93,6 +94,7 @@ struct PinyinSmoke {
         for input in ["womxianz", "nihm", "womendouyouyigejia", String(repeating: "w", count: 64)] {
             check(engine.candidates(for: input).count <= 40)
         }
+        guard failures.isEmpty else { fatalError("Pinyin checks failed at lines \(failures)") }
         print("Pinyin + voice delivery checks passed; bundled keys: \(lexicon.count); stress seconds: \(Date().timeIntervalSince(started))")
     }
 }

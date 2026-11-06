@@ -22,7 +22,7 @@ final class PinyinEngine {
         var patterns = syllables.isEmpty ? lexicon : syllables
         // Public everyday phrases absent from the small bundled dictionary.
         let supplements = ["shu'nv": ["淑女", "熟女"], "kong'ge": ["空格"],
-                           "shuang'ji": ["双击"], "ju'hao": ["句号"], "ni'hao'ma": ["你好吗", "你好嘛", "你好妈"]]
+                           "shuang'ji": ["双击"], "ju'hao": ["句号"], "ni'hao'ma": ["你好吗", "你好嘛", "你好妈"], "shuang'ji'kong'ge": ["双击空格"]]
         for (pattern, words) in supplements {
             patterns[pattern] = words + (patterns[pattern] ?? []).filter { !words.contains($0) }
         }
