@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 
 @available(iOS 18.0, *)
