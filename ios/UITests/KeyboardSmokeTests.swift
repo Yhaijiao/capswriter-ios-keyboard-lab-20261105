@@ -64,6 +64,7 @@ final class KeyboardSmokeTests: XCTestCase {
         }
         XCTAssertTrue(testButton.waitForExistence(timeout: 10), app.debugDescription)
         let pageBounds = app.scrollViews["keyboard-pages"].frame
+        XCTAssertLessThanOrEqual(pageBounds.height, 216, "Normal compact body must not retain the extra footer row")
         XCTAssertGreaterThanOrEqual(testButton.frame.minY, pageBounds.minY)
         XCTAssertLessThanOrEqual(testButton.frame.maxY, pageBounds.maxY)
         app.buttons["keyboard-return"].tap()
@@ -100,7 +101,14 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue(unfinished.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["candidate-我妈"].exists)
         attach(app, name: "Unfinished wom predicts women")
-        unfinished.tap()
+        app.buttons["pinyin-expand-candidates"].tap()
+        let gridChoice = app.buttons["grid-candidate-我们"]
+        XCTAssertTrue(gridChoice.waitForExistence(timeout: 5))
+        XCTAssertTrue(gridChoice.isHittable)
+        XCTAssertTrue(app.buttons["grid-candidate-我妈"].isHittable)
+        attach(app, name: "Expanded pinyin candidate grid")
+        gridChoice.tap()
+        XCTAssertFalse(app.buttons["grid-candidate-我们"].isHittable, "Selecting the full composition collapses the grid")
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("你好我们"))
         for letter in "nihaom" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue(app.buttons["candidate-你好吗"].waitForExistence(timeout: 5))

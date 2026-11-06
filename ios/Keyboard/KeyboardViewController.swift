@@ -26,6 +26,25 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var candidateRow: UIStackView?
     private weak var candidateScroll: UIScrollView?
     private weak var compositionLabel: UILabel?
+    private weak var expandCandidatesButton: UIButton?
+    private let candidateGrid = UIScrollView()
+    private let candidateGridRows = UIStackView()
+    private var candidatesExpanded = false
+    private var displayedCandidates: [PinyinCandidate] = []
+    private var gridColumns = 0
+    private weak var switchFooter: UIStackView?
+    private var showsSwitchFooter = false
+    private weak var hotEditor: UITextView?
+    private weak var hotEditorBar: UIStackView?
+    private var hotRevision = ""
+    private var hotFileID = "hot"
+    private var hotRequest = UUID()
+    private weak var hotManager: HotwordManagerView?
+    private weak var hotEditorStatus: UILabel?
+    private weak var hotSaveButton: UIButton?
+    private weak var hotCancelButton: UIButton?
+    private weak var hotAddButton: UIButton?
+    private var hotSaving = false
     private var previewedText: String?
     private var bridgeRequestID = UUID()
     private var voiceID: String?
@@ -54,7 +73,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        appeared = true; globe?.isHidden = !needsInputModeSwitchKey
+        appeared = true
+        updatePreferredHeight()
         insertVoiceResultIfReady()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
     }
@@ -62,7 +82,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = Lab.background
-        heightConstraint = view.heightAnchor.constraint(equalToConstant: 324)
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: 272)
         heightConstraint?.priority = .defaultHigh; heightConstraint?.isActive = true
         content.axis = .vertical; content.spacing = 8
         content.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(content)
@@ -76,12 +96,24 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
-        if appeared { globe?.isHidden = !needsInputModeSwitchKey }
+        if appeared { updatePreferredHeight() }
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let width = pager.bounds.width
         layoutPages(center: width > 0 && abs(width - pageWidth) > 0.5)
+        let columns = view.bounds.width >= 390 ? 4 : 3
+        if columns != gridColumns { gridColumns = columns; rebuildCandidateGrid() }
+    }
+    private func updatePreferredHeight() {
+        showsSwitchFooter = appeared && extensionContext != nil && needsInputModeSwitchKey
+        switchFooter?.isHidden = !showsSwitchFooter
+        globe?.isHidden = !showsSwitchFooter
+        let height: CGFloat = 272 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        if heightConstraint?.constant != height {
+            heightConstraint?.constant = height
+            view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
+        }
     }
     private func layoutPages(center: Bool) {
         let width = pager.bounds.width
@@ -98,6 +130,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if pager.contentOffset.y != 0 { pager.contentOffset.y = 0 }
     }
     private func changeMode(_ next: Mode) {
+        guard !hotSaving else { modeSelector?.selectedSegmentIndex = mode.rawValue; return }
+        if hotEditor != nil && next == .voice { modeSelector?.selectedSegmentIndex = mode.rawValue; return }
         guard next != mode, !changingPage, !pager.isDragging, !pager.isDecelerating else {
             modeSelector?.selectedSegmentIndex = mode.rawValue; return
         }
@@ -206,7 +240,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             candidates.heightAnchor.constraint(equalTo: candidatesScroll.frameLayoutGuide.heightAnchor)
         ])
         candidateRow = candidates
-        let candidateHeader = row([composition, candidatesScroll], equal: false)
+        let expand = Lab.button("", symbol: "chevron.down") { [weak self] in
+            guard let self = self else { return }; self.setCandidatesExpanded(!self.candidatesExpanded)
+        }
+        expand.configuration?.contentInsets = .zero
+        expand.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        expand.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        expand.accessibilityIdentifier = "pinyin-expand-candidates"
+        expandCandidatesButton = expand
+        let candidateHeader = row([composition, candidatesScroll, expand], equal: false)
         let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 32)
         candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
         candidateHeader.isHidden = true; pinyinHeader = candidateHeader
@@ -229,16 +271,32 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             pageStrip.heightAnchor.constraint(equalTo: pager.frameLayoutGuide.heightAnchor)
         ])
         content.addArrangedSubview(pager)
+        candidateGrid.backgroundColor = Lab.background
+        candidateGrid.accessibilityIdentifier = "pinyin-candidate-grid"
+        candidateGrid.isHidden = true; candidateGrid.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(candidateGrid)
+        candidateGridRows.axis = .vertical; candidateGridRows.spacing = 5
+        candidateGridRows.translatesAutoresizingMaskIntoConstraints = false; candidateGrid.addSubview(candidateGridRows)
+        NSLayoutConstraint.activate([
+            candidateGrid.topAnchor.constraint(equalTo: pager.topAnchor),
+            candidateGrid.bottomAnchor.constraint(equalTo: pager.bottomAnchor),
+            candidateGrid.leadingAnchor.constraint(equalTo: pager.leadingAnchor),
+            candidateGrid.trailingAnchor.constraint(equalTo: pager.trailingAnchor),
+            candidateGridRows.topAnchor.constraint(equalTo: candidateGrid.contentLayoutGuide.topAnchor),
+            candidateGridRows.bottomAnchor.constraint(equalTo: candidateGrid.contentLayoutGuide.bottomAnchor),
+            candidateGridRows.leadingAnchor.constraint(equalTo: candidateGrid.contentLayoutGuide.leadingAnchor),
+            candidateGridRows.trailingAnchor.constraint(equalTo: candidateGrid.contentLayoutGuide.trailingAnchor),
+            candidateGridRows.widthAnchor.constraint(equalTo: candidateGrid.frameLayoutGuide.widthAnchor)
+        ])
         let globe = key("", symbol: "globe") {}
+        globe.isHidden = true
         globe.accessibilityLabel = "切换键盘，按住选择输入法"
         globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         globe.widthAnchor.constraint(equalToConstant: 45).isActive = true; self.globe = globe
         let note = Lab.label("", size: 10, color: Lab.muted)
         note.textAlignment = .center; self.feedback = note
-        let bridge = key("", symbol: "network") { [weak self] in self?.showBridge() }
-        bridge.accessibilityLabel = "电脑热词连接设置"
-        bridge.widthAnchor.constraint(equalToConstant: 45).isActive = true
-        content.addArrangedSubview(row([globe, note, bridge], equal: false))
+        let footer = row([globe, note], equal: false)
+        footer.isHidden = true; switchFooter = footer; content.addArrangedSubview(footer)
     }
     private func renderVoice(content: UIStackView) {
         let hint = Lab.label(voiceMessage, size: 14, color: Lab.muted)
@@ -262,7 +320,19 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             key("@") { [weak self] in self?.input("@") }, deleteKey()
         ]))
         let enter = returnKey(); enter.widthAnchor.constraint(equalToConstant: 152).isActive = true
-        content.addArrangedSubview(centeredRow(enter))
+        let left = UIView(), right = UIView()
+        let hotwords = key("", symbol: "text.badge.plus") { [weak self] in self?.openHotwords() }
+        hotwords.accessibilityIdentifier = "keyboard-hotwords"
+        hotwords.accessibilityLabel = "查看与编辑热词"
+        hotwords.translatesAutoresizingMaskIntoConstraints = false; right.addSubview(hotwords)
+        let lastRow = row([left, enter, right], equal: false)
+        NSLayoutConstraint.activate([
+            left.widthAnchor.constraint(equalTo: right.widthAnchor),
+            hotwords.trailingAnchor.constraint(equalTo: right.trailingAnchor),
+            hotwords.centerYAnchor.constraint(equalTo: right.centerYAnchor),
+            hotwords.widthAnchor.constraint(equalToConstant: 44)
+        ])
+        content.addArrangedSubview(lastRow)
     }
 
     private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,
@@ -346,7 +416,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func insertVoiceResultIfReady() {
         // A completion arriving while the keyboard is hidden must wait for its
         // host connection, and must never insert the same job twice.
-        guard appeared, viewIfLoaded?.window != nil, voiceState == "done" else { return }
+        guard appeared, viewIfLoaded?.window != nil, voiceState == "done", hotEditor == nil else { return }
         let documentID = textDocumentProxy.documentIdentifier
         guard voiceDelivery.documentID == documentID else {
             cancelVoice(); resetVoice("输入框已改变，请重新录音。"); return
@@ -378,7 +448,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         resetVoice("录音已取消 · 点击重新开始")
     }
     private func renderLetters(mode: Mode, content: UIStackView) {
-        let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+="] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+        let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+=|"] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
         var letterWidth: NSLayoutDimension?
         var sizingConstraints: [NSLayoutConstraint] = []
         for (index, line) in layouts.enumerated() {
@@ -434,20 +504,37 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
             guard let self = self else { return }
-            if self.composition.isEmpty { self.textDocumentProxy.insertText("\n") } else { self.commitComposition() }
+            if self.composition.isEmpty { self.insertText("\n") } else { self.commitComposition() }
         }
         button.accessibilityIdentifier = "keyboard-return"; return button
     }
     private func input(_ text: String) {
+        guard !hotSaving else { return }
         if mode == .pinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
             guard composition.count < 64 else { return }; composition += text; updateCandidates()
-        } else { commitComposition(); textDocumentProxy.insertText(text) }
+        } else { commitComposition(); insertText(text) }
     }
     private func space() {
-        if composition.isEmpty { textDocumentProxy.insertText(" ") } else { commitComposition() }
+        guard !hotSaving else { return }
+        if composition.isEmpty { insertText(" ") } else { commitComposition() }
     }
     private func deleteCharacter() {
-        if composition.isEmpty { textDocumentProxy.deleteBackward() }
+        guard !hotSaving else { return }
+        if composition.isEmpty {
+            if let editor = hotEditor {
+                let text = editor.text as NSString
+                let selected = editor.selectedRange
+                let location = min(selected.location, text.length)
+                var range = NSRange(location: location, length: min(selected.length, text.length - location))
+                if range.length == 0 && range.location > 0 {
+                    range = text.rangeOfComposedCharacterSequence(at: range.location - 1)
+                }
+                if range.length > 0 {
+                    editor.textStorage.replaceCharacters(in: range, with: "")
+                    editor.selectedRange = NSRange(location: range.location, length: 0)
+                }
+            } else { textDocumentProxy.deleteBackward() }
+        }
         else { composition.removeLast(); updateCandidates() }
     }
     private func deleteKey() -> UIButton {
@@ -483,30 +570,215 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func stopDeleting() { deleteTimer?.invalidate(); deleteTimer = nil; deleteGesture = nil }
     private func choose(_ candidate: PinyinCandidate) {
-        textDocumentProxy.insertText(candidate.text)
+        insertText(candidate.text)
         composition = String(composition.dropFirst(candidate.consumed)); updateCandidates()
     }
     private func commitComposition() {
         guard !composition.isEmpty else { return }
         while !composition.isEmpty {
             if let first = pinyin.candidates(for: composition).first { choose(first) }
-            else { textDocumentProxy.insertText(composition); composition = "" }
+            else { insertText(composition); composition = "" }
         }
         updateCandidates()
     }
     private func updateCandidates() {
         let composing = mode == .pinyin && !composition.isEmpty
         normalHeader?.isHidden = composing; pinyinHeader?.isHidden = !composing
-        guard mode == .pinyin else { return }
+        if !composing { setCandidatesExpanded(false) }
+        guard mode == .pinyin else { displayedCandidates = []; return }
         compositionLabel?.text = composition
         guard let row = candidateRow else { return }
         for view in row.arrangedSubviews { row.removeArrangedSubview(view); view.removeFromSuperview() }
-        for candidate in pinyin.candidates(for: composition) {
+        displayedCandidates = pinyin.candidates(for: composition)
+        for candidate in displayedCandidates {
             let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
             button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9)
             button.accessibilityIdentifier = "candidate-" + candidate.text; row.addArrangedSubview(button)
         }
+        expandCandidatesButton?.isEnabled = !displayedCandidates.isEmpty
+        rebuildCandidateGrid()
         candidateScroll?.setContentOffset(.zero, animated: false)
+    }
+    private func setCandidatesExpanded(_ expanded: Bool) {
+        candidatesExpanded = expanded && mode == .pinyin && !composition.isEmpty
+        candidateGrid.isHidden = !candidatesExpanded
+        pageStrip.isHidden = candidatesExpanded
+        pager.isScrollEnabled = !candidatesExpanded && hotEditor == nil
+        pager.accessibilityElementsHidden = candidatesExpanded
+        expandCandidatesButton?.configuration?.image = UIImage(systemName: candidatesExpanded ? "chevron.up" : "chevron.down")
+        expandCandidatesButton?.accessibilityLabel = candidatesExpanded ? "收起候选词" : "展开全部候选词"
+        if candidatesExpanded { rebuildCandidateGrid(); candidateGrid.setContentOffset(.zero, animated: false) }
+    }
+    private func rebuildCandidateGrid() {
+        guard candidatesExpanded else { return }
+        for view in candidateGridRows.arrangedSubviews {
+            candidateGridRows.removeArrangedSubview(view); view.removeFromSuperview()
+        }
+        let columns = max(3, gridColumns)
+        for start in stride(from: 0, to: displayedCandidates.count, by: columns) {
+            var buttons: [UIView] = []
+            for candidate in displayedCandidates[start..<min(start + columns, displayedCandidates.count)] {
+                let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
+                button.configuration?.cornerStyle = .medium
+                button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3)
+                button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+                    var output = input; output.font = .systemFont(ofSize: 17); return output
+                }
+                button.titleLabel?.adjustsFontSizeToFitWidth = true
+                button.titleLabel?.minimumScaleFactor = 0.6
+                button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+                button.accessibilityIdentifier = "grid-candidate-" + candidate.text
+                buttons.append(button)
+            }
+            while buttons.count < columns { buttons.append(UIView()) }
+            candidateGridRows.addArrangedSubview(row(buttons))
+        }
+    }
+    private func insertText(_ text: String) {
+        guard !hotSaving else { return }
+        guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
+        let length = (editor.text as NSString).length
+        let selected = editor.selectedRange
+        let location = min(selected.location, length)
+        let range = NSRange(location: location, length: min(selected.length, length - location))
+        editor.textStorage.replaceCharacters(in: range, with: text)
+        editor.selectedRange = NSRange(location: range.location + text.utf16.count, length: 0)
+        editor.scrollRangeToVisible(editor.selectedRange)
+    }
+    private func openHotwords() {
+        guard !voiceBusy, voiceID == nil,
+              !["pending", "recording", "stopping", "processing"].contains(voiceState) else {
+            voiceMessage = "请先结束本次语音，再编辑热词。"; updateVoice(); return
+        }
+        guard hasFullAccess else {
+            voiceMessage = "热词管理需在键盘设置允许完全访问。"; updateVoice(); return
+        }
+        stopDeleting(); commitComposition(); setCandidatesExpanded(false)
+        if let manager = hotManager { manager.removeFromSuperview() }
+        let manager = HotwordManagerView(); manager.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(manager); hotManager = manager
+        NSLayoutConstraint.activate([
+            manager.topAnchor.constraint(equalTo: view.topAnchor), manager.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            manager.leadingAnchor.constraint(equalTo: view.leadingAnchor), manager.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        manager.onClose = { [weak self, weak manager] in
+            self?.hotRequest = UUID(); manager?.removeFromSuperview()
+        }
+        manager.onSettings = { [weak self, weak manager] in
+            self?.hotRequest = UUID(); manager?.removeFromSuperview(); self?.showBridge()
+        }
+        manager.onReload = { [weak self, weak manager] in
+            guard let manager = manager else { return }; self?.loadHotwords(into: manager)
+        }
+        manager.onEdit = { [weak self, weak manager] file in
+            manager?.removeFromSuperview(); self?.showHotwordEditor(file)
+        }
+        loadHotwords(into: manager)
+    }
+    private func loadHotwords(into manager: HotwordManagerView) {
+        hotRequest = UUID(); let request = hotRequest
+        manager.showError("正在读取当前词库…")
+        voiceCall("/v1/hotwords") { [weak self, weak manager] result in
+            guard let self = self, self.hotRequest == request, let manager = manager else { return }
+            switch result {
+            case .success(let reply): manager.show(files: reply.hotword_files ?? [])
+            case .failure(let error): manager.showError(error.localizedDescription)
+            }
+        }
+    }
+    // Internal presentation entry point also exercised by the UIKit regression.
+    func showHotwordEditor(_ file: HotwordFile) {
+        guard file.writable, hotEditor == nil else { return }
+        stopDeleting(); commitComposition(); setCandidatesExpanded(false)
+        hotRequest = UUID(); hotRevision = file.revision; hotFileID = file.id
+        let editor = UITextView()
+        editor.text = file.text; editor.font = .systemFont(ofSize: 15)
+        editor.textColor = .white; editor.backgroundColor = Lab.surface; editor.layer.cornerRadius = 9
+        editor.autocorrectionType = .no; editor.autocapitalizationType = .none
+        editor.spellCheckingType = .no; editor.smartQuotesType = .no; editor.smartDashesType = .no
+        // The extension's visible EN/Pinyin keys edit this text view. Do not ask
+        // UIKit to place a second system keyboard inside the keyboard extension.
+        editor.inputView = UIView(frame: .zero)
+        editor.inputAssistantItem.leadingBarButtonGroups = []; editor.inputAssistantItem.trailingBarButtonGroups = []
+        editor.textContainerInset = UIEdgeInsets(top: 7, left: 6, bottom: 7, right: 6)
+        editor.heightAnchor.constraint(equalToConstant: 96).isActive = true
+        editor.selectedRange = NSRange(location: file.text.utf16.count, length: 0)
+        editor.accessibilityIdentifier = "hotword-editor-text"
+        hotEditor = editor
+        let title = Lab.label(file.name, size: 12, color: Lab.muted); title.numberOfLines = 2
+        title.accessibilityIdentifier = "hotword-editor-status"; hotEditorStatus = title
+        let cancel = editorAction("取消") { [weak self] in self?.closeHotwordEditor(saved: false) }
+        cancel.accessibilityIdentifier = "hotword-editor-cancel"; hotCancelButton = cancel
+        let add = editorAction("添加") { [weak self] in
+            guard let self = self, let editor = self.hotEditor, !self.hotSaving else { return }
+            self.commitComposition()
+            editor.selectedRange = NSRange(location: editor.text.utf16.count, length: 0)
+            if !editor.text.isEmpty && !editor.text.hasSuffix("\n") { self.insertText("\n") }
+            editor.scrollRangeToVisible(editor.selectedRange)
+        }
+        add.accessibilityIdentifier = "hotword-add-line"; hotAddButton = add
+        add.accessibilityHint = "点按添加一行，按住插入误识别分隔符或排除标记"
+        add.menu = UIMenu(children: [
+            UIAction(title: "插入误识别分隔符 |") { [weak self] _ in self?.commitComposition(); self?.insertText(" | ") },
+            UIAction(title: "插入排除标记 ~~~") { [weak self] _ in self?.commitComposition(); self?.insertText("~~~") },
+            UIAction(title: "插入注释 #") { [weak self] _ in self?.commitComposition(); self?.insertText("#") }
+        ])
+        let save = editorAction("保存") { [weak self] in self?.saveHotwords() }
+        save.accessibilityIdentifier = "hotword-editor-save"; hotSaveButton = save
+        for button in [cancel, add, save] { button.widthAnchor.constraint(equalToConstant: 48).isActive = true }
+        let bar = row([cancel, add, title, save], equal: false)
+        bar.heightAnchor.constraint(equalToConstant: 32).isActive = true; hotEditorBar = bar
+        content.insertArrangedSubview(bar, at: 0); content.insertArrangedSubview(editor, at: 1)
+        mode = .pinyin; shifted = false; symbols = false
+        modeSelector?.setEnabled(false, forSegmentAt: Mode.voice.rawValue)
+        updatePreferredHeight(); render()
+        editor.scrollRangeToVisible(editor.selectedRange)
+    }
+    private func editorAction(_ title: String, action: @escaping () -> Void) -> UIButton {
+        let button = Lab.button(title, action: action)
+        button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
+        button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = .systemFont(ofSize: 14); return output
+        }
+        return button
+    }
+    private func saveHotwords() {
+        guard let editor = hotEditor, !hotSaving else { return }
+        commitComposition(); stopDeleting()
+        hotRequest = UUID(); let request = hotRequest
+        let value: [String: Any] = ["file_id": hotFileID, "revision": hotRevision, "text": editor.text ?? ""]
+        setHotSaving(true); hotEditorStatus?.text = "正在保存…"
+        voiceCall("/v1/hotwords/save", value: value) { [weak self] result in
+            guard let self = self, self.hotRequest == request, self.hotEditor != nil else { return }
+            self.setHotSaving(false)
+            switch result {
+            case .success:
+                self.closeHotwordEditor(saved: true)
+            case .failure(let error):
+                // Retain the entire draft, cursor and original revision. A 409
+                // must never silently overwrite an edit made on the computer.
+                self.hotEditorStatus?.text = error.localizedDescription
+            }
+        }
+    }
+    private func setHotSaving(_ saving: Bool) {
+        hotSaving = saving
+        hotSaveButton?.isEnabled = !saving; hotCancelButton?.isEnabled = !saving; hotAddButton?.isEnabled = !saving
+        hotEditor?.isUserInteractionEnabled = !saving
+        pager.isUserInteractionEnabled = !saving; modeSelector?.isEnabled = !saving
+    }
+    private func closeHotwordEditor(saved: Bool) {
+        guard !hotSaving else { return }
+        stopDeleting(); hotRequest = UUID(); composition = ""
+        hotEditor?.resignFirstResponder()
+        for item in [hotEditorBar as UIView?, hotEditor as UIView?].compactMap({ $0 }) {
+            content.removeArrangedSubview(item); item.removeFromSuperview()
+        }
+        hotEditor = nil; hotEditorBar = nil; hotEditorStatus = nil
+        modeSelector?.setEnabled(true, forSegmentAt: Mode.voice.rawValue)
+        mode = .voice; shifted = false; symbols = false
+        if saved { voiceMessage = "热词已保存 · 点击开始录音" }
+        updatePreferredHeight(); render()
     }
     private func showBridge() {
         guard hasFullAccess else { feedback?.text = "电脑连接需在键盘设置开启“允许完全访问”"; return }
