@@ -124,6 +124,11 @@ final class KeyboardLayoutTests: XCTestCase {
         space.sendActions(for: .primaryActionTriggered)
         space.sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "测试。", "Double space adds a Chinese sentence stop")
+        editor.text = ""; editor.selectedRange = NSRange(location: 0, length: 0)
+        for letter in "wom" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        space.sendActions(for: .primaryActionTriggered)
+        space.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "我们。", "Composition commit counts as the first space tap")
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }

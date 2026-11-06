@@ -28,6 +28,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var compositionLabel: UILabel?
     private let compositionViewport = UIScrollView()
     private var lastSpaceAt = Date.distantPast
+    private var spaceCommittedComposition = false
     private weak var expandCandidatesButton: UIButton?
     private let candidateGrid = UIScrollView()
     private let candidateGridRows = UIStackView()
@@ -518,13 +519,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
             guard let self = self else { return }
+            self.spaceCommittedComposition = false; self.lastSpaceAt = .distantPast
             if self.composition.isEmpty { self.insertText("\n") } else { self.commitComposition() }
         }
         button.accessibilityIdentifier = "keyboard-return"; return button
     }
     private func input(_ text: String) {
         guard !hotSaving else { return }
-        lastSpaceAt = .distantPast
+        lastSpaceAt = .distantPast; spaceCommittedComposition = false
         if mode == .pinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
             guard composition.count < 64 else { return }; composition += text; updateCandidates()
         } else { commitComposition(); insertText(text) }
@@ -532,6 +534,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func space() {
         guard !hotSaving else { return }
         if composition.isEmpty {
+            if spaceCommittedComposition && Date().timeIntervalSince(lastSpaceAt) < 0.4 {
+                insertText(mode == .pinyin ? "。" : ". ")
+                lastSpaceAt = .distantPast; spaceCommittedComposition = false; return
+            }
+            spaceCommittedComposition = false
             let context: String
             if let editor = hotEditor {
                 context = String((editor.text as NSString).substring(to: min(editor.selectedRange.location, (editor.text as NSString).length)))
@@ -542,10 +549,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 deleteCharacter(); insertText(mode == .pinyin ? "。" : ". ")
                 lastSpaceAt = .distantPast
             } else { insertText(" "); lastSpaceAt = Date() }
-        } else { commitComposition(); lastSpaceAt = .distantPast }
+        } else { commitComposition(); lastSpaceAt = Date(); spaceCommittedComposition = true }
     }
     private func deleteCharacter() {
         guard !hotSaving else { return }
+        spaceCommittedComposition = false
         if composition.isEmpty {
             if let editor = hotEditor {
                 let text = editor.text as NSString
