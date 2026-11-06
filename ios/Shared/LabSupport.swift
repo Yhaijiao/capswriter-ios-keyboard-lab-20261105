@@ -62,17 +62,40 @@ enum BridgeError: LocalizedError {
     case invalidAddress, invalidToken, server(Int), invalidReply, message(String)
     var errorDescription: String? {
         switch self {
-        case .invalidAddress: return "请输入局域网地址，例如 http://192.168.1.20:8765"
-        case .invalidToken: return "请输入电脑端显示的配对码"
-        case .server(let code): return "电脑服务返回 HTTP \(code)，请检查配对码和服务状态"
-        case .invalidReply: return "电脑服务的响应格式不正确"
+        case .invalidAddress: return "请输入有效服务地址：局域网可用 HTTP，公网必须使用 HTTPS。"
+        case .invalidToken: return "请输入识别服务的有效配对码"
+        case .server(let code): return "识别服务返回 HTTP \(code)，请检查配对码和服务状态"
+        case .invalidReply: return "识别服务的响应格式不正确"
         case .message(let text): return text
         }
     }
 }
 
+final class BridgeRedirectGuard: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let original = task.originalRequest, let source = original.url, let destination = request.url,
+              BridgeEndpoint.sameOrigin(source, destination) else { completionHandler(nil); return }
+        var accepted = request
+        if let bearer = original.value(forHTTPHeaderField: "Authorization") {
+            accepted.setValue(bearer, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(accepted)
+    }
+}
+
 final class BridgeClient {
-    private static let session = URLSession(configuration: .ephemeral)
+    private static let redirectGuard = BridgeRedirectGuard()
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration, delegate: redirectGuard, delegateQueue: nil)
+    }()
     static func request(address: String, token: String, text: String? = nil,
                         completion: @escaping (Result<BridgeReply, Error>) -> Void) {
         call(address: address, token: token, path: text == nil ? "/v1/status" : "/v1/correct",
@@ -83,18 +106,12 @@ final class BridgeClient {
     static func call(address: String, token: String, path: String, value: [String: Any]? = nil,
                      jobID: String? = nil, timeout: TimeInterval = 10,
                      completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask? {
-        // This experimental bridge is deliberately LAN-only; no arbitrary internet destinations.
-        guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
-              parts.scheme == "http", parts.user == nil, parts.password == nil,
-              let host = parts.host, isLocal(host),
-              var urlParts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let endpoint = BridgeEndpoint(address: address), let url = endpoint.requestURL(path: path, jobID: jobID) else {
             completion(.failure(BridgeError.invalidAddress)); return nil
         }
-        guard !token.isEmpty else { completion(.failure(BridgeError.invalidToken)); return nil }
-        urlParts.path = path
-        urlParts.query = nil; urlParts.fragment = nil
-        if let jobID = jobID { urlParts.queryItems = [URLQueryItem(name: "id", value: jobID)] }
-        guard let url = urlParts.url else { completion(.failure(BridgeError.invalidAddress)); return nil }
+        guard isValidToken(token) else {
+            completion(.failure(BridgeError.invalidToken)); return nil
+        }
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let value = value {
@@ -118,12 +135,11 @@ final class BridgeClient {
     }
 
     static func isLocal(_ host: String) -> Bool {
-        if host == "localhost" || host == "127.0.0.1" || host.hasSuffix(".local") { return true }
-        let pieces = host.split(separator: ".", omittingEmptySubsequences: false)
-        guard pieces.count == 4, pieces.allSatisfy({ !$0.isEmpty && $0.allSatisfy({ $0 >= "0" && $0 <= "9" }) }) else { return false }
-        let octets = pieces.compactMap { Int($0) }
-        guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else { return false }
-        return octets[0] == 10 || (octets[0] == 192 && octets[1] == 168)
-            || (octets[0] == 172 && (16...31).contains(octets[1]))
+        BridgeEndpoint.isLocalHost(host)
+    }
+
+    static func isValidToken(_ token: String) -> Bool {
+        !token.isEmpty && token.count <= 4096
+            && !token.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) })
     }
 }
