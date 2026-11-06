@@ -105,7 +105,7 @@ final class KeyboardLayoutTests: XCTestCase {
             root.topAnchor.constraint(equalTo: host.view.topAnchor),
             root.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
-            root.heightAnchor.constraint(equalToConstant: 416)
+            root.heightAnchor.constraint(equalToConstant: 440)
         ])
         controller.didMove(toParent: host)
         controller.showHotwordEditor(HotwordFile(id: "hot", name: "hot.txt", text: "开始\n🧑🏽‍💻", revision: "fixture", writable: true))
@@ -115,6 +115,7 @@ final class KeyboardLayoutTests: XCTestCase {
         delete.sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n", "One delete removes the entire composed emoji")
         for letter in "wom" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        await waitForCandidate("candidate-我们", in: root)
         visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
         host.view.layoutIfNeeded(); root.layoutIfNeeded()
         visibleButton("grid-candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
@@ -143,6 +144,22 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertNotNil(visibleButton("key-1", in: root))
         visibleButton("keyboard-number-toggle", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertNotNil(visibleButton("key-q", in: root))
+        let spelling = "wozainijiashehuilema"
+        let typingStarted = Date()
+        for letter in spelling { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        print("Rapid pinyin input main-thread seconds: \(Date().timeIntervalSince(typingStarted))")
+        let label = descendants(root).first { $0.accessibilityIdentifier == "pinyin-composition" } as! UILabel
+        XCTAssertEqual(label.text, spelling, "Rapid typing must not drop letters")
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        let viewport = descendants(root).first { $0.accessibilityIdentifier == "pinyin-composition-scroll" } as! UIScrollView
+        let candidateLine = descendants(root).first { $0.accessibilityIdentifier == "pinyin-candidate-line" }!
+        XCTAssertEqual(viewport.bounds.width, root.bounds.width - 24, accuracy: 1)
+        XCTAssertEqual(viewport.contentOffset.x, 0, accuracy: 1)
+        XCTAssertLessThanOrEqual(viewport.convert(viewport.bounds, to: root).maxY, candidateLine.convert(candidateLine.bounds, to: root).minY + 1)
+        for _ in spelling { visibleButton("keyboard-delete", in: root).sendActions(for: .primaryActionTriggered) }
+        for letter in "nihao" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        await waitForCandidate("candidate-你好", in: root)
+        XCTAssertEqual(label.text, "nihao", "A stale decoding result cannot replace new input")
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }
@@ -180,6 +197,14 @@ final class KeyboardLayoutTests: XCTestCase {
         }
         XCTAssertNotNil(match, "Missing visible button: " + identifier)
         return match as! UIButton
+    }
+
+    @MainActor private func waitForCandidate(_ identifier: String, in root: UIView) async {
+        for _ in 0..<300 {
+            if descendants(root).contains(where: { $0.accessibilityIdentifier == identifier && !$0.isHidden }) { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for \(identifier)")
     }
 
     @MainActor private func descendants(_ view: UIView) -> [UIView] {

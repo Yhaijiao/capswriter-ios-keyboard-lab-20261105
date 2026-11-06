@@ -12,6 +12,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var extraSymbols = false
     private var composition = ""
     private lazy var pinyin = PinyinEngine()
+    private let candidateQueue = DispatchQueue(label: "org.capswriterlab.pinyin", qos: .userInitiated)
+    private let candidateLock = NSLock()
+    private var candidateGeneration = 0
+    private var displayedComposition = ""
     private let content = UIStackView()
     private let pager = KeyboardPagingScrollView()
     private let pageStrip = UIStackView()
@@ -113,7 +117,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         showsSwitchFooter = appeared && extensionContext != nil && needsInputModeSwitchKey
         switchFooter?.isHidden = !showsSwitchFooter
         globe?.isHidden = !showsSwitchFooter
-        let height: CGFloat = 272 + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        let composing = mode == .pinyin && !composition.isEmpty
+        let height: CGFloat = 272 + (composing ? 24 : 0) + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
         if heightConstraint?.constant != height {
             heightConstraint?.constant = height
             view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
@@ -234,7 +239,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         composition.translatesAutoresizingMaskIntoConstraints = false
         compositionViewport.addSubview(composition)
         compositionViewport.showsHorizontalScrollIndicator = false
-        compositionViewport.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        compositionViewport.accessibilityIdentifier = "pinyin-composition-scroll"
+        compositionViewport.delaysContentTouches = false
+        compositionViewport.heightAnchor.constraint(equalToConstant: 24).isActive = true
         NSLayoutConstraint.activate([
             composition.leadingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.leadingAnchor),
             composition.trailingAnchor.constraint(equalTo: compositionViewport.contentLayoutGuide.trailingAnchor),
@@ -243,7 +250,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             composition.heightAnchor.constraint(equalTo: compositionViewport.frameLayoutGuide.heightAnchor)
         ])
         compositionLabel = composition
-        let candidatesScroll = UIScrollView(); candidatesScroll.showsHorizontalScrollIndicator = false
+        let candidatesScroll = KeyboardPagingScrollView(); candidatesScroll.showsHorizontalScrollIndicator = false
+        candidatesScroll.delaysContentTouches = false
         candidatesScroll.accessibilityIdentifier = "pinyin-candidates"; candidateScroll = candidatesScroll
         let candidates = UIStackView(); candidates.axis = .horizontal; candidates.spacing = 6
         candidates.translatesAutoresizingMaskIntoConstraints = false; candidatesScroll.addSubview(candidates)
@@ -263,8 +271,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         expand.heightAnchor.constraint(equalToConstant: 30).isActive = true
         expand.accessibilityIdentifier = "pinyin-expand-candidates"
         expandCandidatesButton = expand
-        let candidateHeader = row([compositionViewport, candidatesScroll, expand], equal: false)
-        let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 32)
+        let candidateLine = row([candidatesScroll, expand], equal: false)
+        candidateLine.accessibilityIdentifier = "pinyin-candidate-line"
+        candidateLine.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        let candidateHeader = UIStackView(arrangedSubviews: [compositionViewport, candidateLine])
+        candidateHeader.axis = .vertical
+        candidateHeader.accessibilityIdentifier = "pinyin-two-line-header"
+        let candidateHeight = candidateHeader.heightAnchor.constraint(equalToConstant: 56)
         candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
         candidateHeader.isHidden = true; pinyinHeader = candidateHeader
         content.addArrangedSubview(candidateHeader)
@@ -615,32 +628,72 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func stopDeleting() { deleteTimer?.invalidate(); deleteTimer = nil; deleteGesture = nil }
     private func choose(_ candidate: PinyinCandidate) {
+        guard displayedComposition == composition else { return }
         insertText(candidate.text)
         composition = String(composition.dropFirst(candidate.consumed)); updateCandidates()
     }
     private func commitComposition() {
         guard !composition.isEmpty else { return }
-        while !composition.isEmpty {
-            if let first = pinyin.candidates(for: composition).first { choose(first) }
-            else { insertText(composition); composition = "" }
+        var remaining = composition, text = ""
+        while !remaining.isEmpty {
+            // Most commits use the already displayed result. A fast space tap
+            // may precede decoding; serialize that fallback with the worker.
+            let options = remaining == displayedComposition ? displayedCandidates : candidateQueue.sync { pinyin.candidates(for: remaining) }
+            if let first = options.first {
+                text += first.text; remaining = String(remaining.dropFirst(first.consumed))
+            } else { text += remaining; remaining = "" }
         }
+        insertText(text); composition = ""
         updateCandidates()
     }
     private func updateCandidates() {
+        candidateLock.lock(); candidateGeneration += 1; let generation = candidateGeneration; candidateLock.unlock()
         let composing = mode == .pinyin && !composition.isEmpty
         normalHeader?.isHidden = composing; pinyinHeader?.isHidden = !composing
+        updatePreferredHeight()
         if !composing { setCandidatesExpanded(false) }
-        guard mode == .pinyin else { displayedCandidates = []; return }
         compositionLabel?.text = composition
-        compositionViewport.layoutIfNeeded()
-        compositionViewport.setContentOffset(CGPoint(x: max(0, compositionViewport.contentSize.width - compositionViewport.bounds.width), y: 0), animated: false)
+        // A dedicated full-width line preserves the beginning of the spelling.
+        // Users can scroll this line to inspect a spelling wider than the screen.
+        compositionViewport.setContentOffset(.zero, animated: false)
+        displayedComposition = ""; displayedCandidates = []
+        candidateRow?.arrangedSubviews.forEach { $0.isHidden = true }
+        expandCandidatesButton?.isEnabled = false
+        guard composing else { return }
+        let buffer = composition
+        candidateQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.candidateLock.lock(); let current = self.candidateGeneration; self.candidateLock.unlock()
+            guard generation == current else { return }
+            let candidates = self.pinyin.candidates(for: buffer)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.mode == .pinyin, self.composition == buffer else { return }
+                self.candidateLock.lock(); let current = self.candidateGeneration; self.candidateLock.unlock()
+                guard generation == current else { return }
+                self.applyCandidates(candidates, for: buffer)
+            }
+        }
+    }
+    private func applyCandidates(_ candidates: [PinyinCandidate], for buffer: String) {
+        displayedCandidates = candidates; displayedComposition = buffer
         guard let row = candidateRow else { return }
-        for view in row.arrangedSubviews { row.removeArrangedSubview(view); view.removeFromSuperview() }
-        displayedCandidates = pinyin.candidates(for: composition)
-        for candidate in displayedCandidates {
-            let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
+        // Reuse controls instead of allocating and constraining forty new
+        // buttons on every letter. Selection always uses the current buffer.
+        while row.arrangedSubviews.count < candidates.count {
+            let index = row.arrangedSubviews.count
+            let button = Lab.button("") { [weak self] in
+                guard let self = self, self.displayedComposition == self.composition,
+                      self.displayedCandidates.indices.contains(index) else { return }
+                self.choose(self.displayedCandidates[index])
+            }
             button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9)
-            button.accessibilityIdentifier = "candidate-" + candidate.text; row.addArrangedSubview(button)
+            row.addArrangedSubview(button)
+        }
+        for (index, view) in row.arrangedSubviews.enumerated() {
+            view.isHidden = index >= candidates.count
+            guard let button = view as? UIButton, index < candidates.count else { continue }
+            button.configuration?.title = candidates[index].text
+            button.accessibilityIdentifier = "candidate-" + candidates[index].text
         }
         expandCandidatesButton?.isEnabled = !displayedCandidates.isEmpty
         rebuildCandidateGrid()

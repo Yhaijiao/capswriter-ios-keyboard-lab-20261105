@@ -11,6 +11,7 @@ final class PinyinEngine {
     private struct Word { let text: String; let cost: Double; let rank: Int }
     private final class Node {
         var children: [String: Node] = [:]
+        var initialChildren: [Character: [([Character], Node)]] = [:]
         var words: [Word] = []
     }
     private struct Visit: Hashable { let node: ObjectIdentifier; let offset: Int }
@@ -33,7 +34,11 @@ final class PinyinEngine {
             exactSpellings.insert(spelling)
             var node = root
             for part in parts {
-                if node.children[part] == nil { node.children[part] = Node() }
+                if node.children[part] == nil {
+                    let child = Node()
+                    node.children[part] = child
+                    if let initial = part.first { node.initialChildren[initial, default: []].append((Array(part), child)) }
+                }
                 node = node.children[part]!
             }
             for text in words {
@@ -161,8 +166,8 @@ final class PinyinEngine {
                 }
             }
             guard offset < input.count else { return }
-            for (syllable, child) in node.children where syllable.first == input[offset] {
-                let chars = Array(syllable), remaining = input.count - offset
+            for (chars, child) in node.initialChildren[input[offset]] ?? [] {
+                let remaining = input.count - offset
                 if remaining >= chars.count && Array(input[offset..<(offset + chars.count)]) == chars {
                     walk(child, offset + chars.count, penalty)
                 }

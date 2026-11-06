@@ -91,6 +91,16 @@ struct PinyinSmoke {
         check(delivery.take(visible: true, documentID: UUID()) == nil)
         check(delivery.take(visible: true, documentID: documentID) == nil)
         let started = Date()
+        var slowestKey: TimeInterval = 0
+        let typing = "wozainijiashehuilema"
+        var buffer = ""
+        for letter in typing {
+            buffer.append(letter)
+            let keyStarted = Date()
+            _ = engine.candidates(for: buffer)
+            slowestKey = max(slowestKey, Date().timeIntervalSince(keyStarted))
+        }
+        print("Pinyin sequential-prefix decode seconds: \(Date().timeIntervalSince(started)); slowest prefix seconds: \(slowestKey)")
         for input in ["womxianz", "nihm", "womendouyouyigejia", String(repeating: "w", count: 64)] {
             check(engine.candidates(for: input).count <= 40)
         }
