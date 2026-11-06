@@ -75,7 +75,7 @@ targets:
             PrimaryLanguage: zh-Hans
             RequestsOpenAccess: true
   KeyboardLayoutTests:
-    type: bundle.unit-testing
+    type: bundle.unit-test
     platform: iOS
     sources:
       - path: ios/LayoutTests
