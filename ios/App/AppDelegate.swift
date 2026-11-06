@@ -89,7 +89,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.button("复制配对配置，交给键盘", symbol: "doc.on.doc") { [weak self] in
             guard let self = self else { return }
             guard self.savePairing() else { return }
-            let value = ["address": self.address.text ?? "", "token": self.token.text ?? ""]
+            var value = ["address": self.address.text ?? "", "token": self.token.text ?? ""]
+            if let expiry = BridgeLease.expiry(address: self.address.text ?? "") { value["expires"] = String(expiry) }
             guard let data = try? JSONSerialization.data(withJSONObject: value),
                   let text = String(data: data, encoding: .utf8) else { return }
             UIPasteboard.general.setItems([["public.utf8-plain-text": "cwlab:v1:" + text]],
@@ -189,11 +190,14 @@ final class LabViewController: UIViewController, UITextViewDelegate {
               let t = values.first(where: { $0.name == "token" })?.value,
               t.count >= 24, t.count <= 128, BridgeClient.isValidToken(t),
               let endpoint = BridgeEndpoint(address: a) else { return }
+        let expiry = values.first(where: { $0.name == "expires" })?.value
+        if let expiry = expiry, Double(expiry).map({ !$0.isFinite || $0 <= 0 }) ?? true { return }
         let alert = UIAlertController(title: "连接识别服务", message: "服务器：\(endpoint.normalizedAddress)\n语音片段、测试文字和热词管理请求将发送到这个服务。请确认这是你自己的服务器。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "使用此服务", style: .default) { [weak self] _ in
             guard let self = self else { return }
             self.voice.stop(); self.address.text = endpoint.normalizedAddress; self.token.text = t
+            BridgeLease.apply(address: endpoint.normalizedAddress, expires: expiry)
             self.connect(correct: false)
         })
         present(alert, animated: true)

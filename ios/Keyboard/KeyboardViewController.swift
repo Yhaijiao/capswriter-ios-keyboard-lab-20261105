@@ -797,12 +797,17 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             guard let raw = UIPasteboard.general.string, raw.hasPrefix("cwlab:v1:"),
                   let data = String(raw.dropFirst(9)).data(using: .utf8),
                   let value = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                  let address = value["address"], let token = value["token"], !token.isEmpty else {
+                  let address = value["address"], let token = value["token"],
+                  let endpoint = BridgeEndpoint(address: address), BridgeClient.isValidToken(token) else {
                 result?.text = "请先在主 App 复制配对配置。"; return
             }
-            UserDefaults.standard.set(address, forKey: "bridge.address")
+            if let expiry = value["expires"], Double(expiry).map({ !$0.isFinite || $0 <= 0 }) ?? true {
+                result?.text = "配对有效期无效，请重新复制。"; return
+            }
+            UserDefaults.standard.set(endpoint.normalizedAddress, forKey: "bridge.address")
             UserDefaults.standard.set(token, forKey: "bridge.token")
-            result?.text = "配对配置已保存，只在点击测试时联网。"
+            BridgeLease.apply(address: endpoint.normalizedAddress, expires: value["expires"])
+            result?.text = "已保存：\(endpoint.normalizedAddress)"
         }
         let run = Lab.button("检查版本 / 纠正测试短句") { [weak self, weak result] in
             guard let self = self else { return }

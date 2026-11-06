@@ -13,8 +13,10 @@ SHA256 = '91d7b03ddae498a39f28fdb85d84d2b4a0fd3838d10b4f897e0ef8975bb9b583'
 def install(private_root):
     with urllib.request.urlopen(URL, timeout=60) as response: data = response.read(32 * 1024 * 1024)
     if hashlib.sha256(data).hexdigest() != SHA256: raise ValueError('Official Linux library archive hash mismatch')
-    target = Path(private_root) / 'core/server/engines/llama/bin'
-    target.mkdir(parents=True, exist_ok=True)
+    # Each upstream binding resolves bin relative to its own __file__.
+    targets = sorted({path.parent / 'bin' for path in (Path(private_root) / 'core/server/engines').rglob('llama.py')})
+    if not targets: raise ValueError('No private llama bindings found')
+    for target in targets: target.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         entries = {member.name: member for member in archive.getmembers()}
         def materialize(member, seen=None):
@@ -33,10 +35,11 @@ def install(private_root):
             if '.so' not in name: continue
             if '..' in PurePosixPath(member.name).parts: raise ValueError('Unsafe archive path')
             content = materialize(member)
-            destination = target / name
-            if destination.exists() and destination.read_bytes() != content:
-                raise FileExistsError('Existing differing library preserved: ' + name)
-            if not destination.exists(): destination.write_bytes(content)
+            for target in targets:
+                destination = target / name
+                if destination.exists() and destination.read_bytes() != content:
+                    raise FileExistsError('Existing differing library preserved: ' + name)
+                if not destination.exists(): destination.write_bytes(content)
             installed.append(name)
     for name in ('libllama.so', 'libggml.so', 'libggml-base.so'):
         if name not in installed: raise ValueError('Required Linux library missing: ' + name)

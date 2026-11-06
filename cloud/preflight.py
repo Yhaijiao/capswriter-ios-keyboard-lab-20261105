@@ -56,6 +56,7 @@ def main():
         for module in ('numpy', 'onnxruntime', 'gguf', 'sherpa_onnx', 'soundfile', 'srt'):
             importlib.import_module(module)
         from core.server.engines.qwen_asr_gguf.asr_engine import QwenASREngine
+        from core.server.app import CapsWriterServer
         result['linux_native_bindings'] = 'imported; model inference still requires the speech probe'
     print(json.dumps(result, indent=2))
 

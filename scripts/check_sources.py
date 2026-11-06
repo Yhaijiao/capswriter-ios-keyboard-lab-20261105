@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    python_files = list(ROOT.glob('bridge/*.py')) + list(ROOT.glob('scripts/*.py'))
+    python_files = list(ROOT.glob('bridge/*.py')) + list(ROOT.glob('scripts/*.py')) + list(ROOT.glob('cloud/*.py'))
     for path in python_files:
         ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
     swift_files = list(ROOT.glob('ios/**/*.swift'))

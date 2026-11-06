@@ -57,7 +57,7 @@ def export(source_root, output):
         for path in (root / folder).rglob('*.py'):
             if path.is_symlink(): raise ValueError('Symlink source is not supported')
             selected[path.relative_to(root).as_posix()] = path.read_bytes()
-    for name in ('core/__init__.py', 'core/logger.py', 'config_server.py', *HOT_FILES):
+    for name in ('core/__init__.py', 'core/logger.py', 'core/constants.py', 'core/protocol.py', 'config_server.py', *HOT_FILES):
         path = root / name
         if path.is_file(): selected[name] = path.read_bytes()
     selected['config_client.py'] = minimal_client_config((root / 'config_client.py').read_text(encoding='utf-8-sig')).encode()

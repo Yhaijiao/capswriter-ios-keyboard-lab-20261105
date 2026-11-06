@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.4.3"
+    static let version = "0.4.4"
     static let maxRecordingSeconds = 300
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
@@ -108,6 +108,9 @@ final class BridgeClient {
                      completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask? {
         guard let endpoint = BridgeEndpoint(address: address), let url = endpoint.requestURL(path: path, jobID: jobID) else {
             completion(.failure(BridgeError.invalidAddress)); return nil
+        }
+        guard !BridgeLease.isExpired(address: endpoint.normalizedAddress) else {
+            completion(.failure(BridgeError.message("试验服务器配置已到期，请更新配对配置。"))); return nil
         }
         guard isValidToken(token) else {
             completion(.failure(BridgeError.invalidToken)); return nil

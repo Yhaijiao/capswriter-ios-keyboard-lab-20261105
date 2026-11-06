@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -80,7 +81,9 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
 
 
 class HotwordHTTPClient:
-    def __init__(self, endpoint, token_file, *, allow_lan_http=False, timeout=15):
+    def __init__(self, endpoint, token_file, *, allow_lan_http=False, timeout=15, expires_at=None):
+        if expires_at is not None and (not math.isfinite(expires_at) or expires_at <= 0):
+            raise SyncError('invalid_endpoint_expiry')
         parts = urllib.parse.urlsplit(endpoint)
         if parts.scheme not in ('https', 'http') or not parts.hostname or parts.username is not None or parts.password is not None or parts.query or parts.fragment:
             raise SyncError('invalid_endpoint')
@@ -101,9 +104,12 @@ class HotwordHTTPClient:
         except (OSError, UnicodeError): raise SyncError('token_file_unavailable')
         if len(self.token) < 24 or any(char.isspace() for char in self.token): raise SyncError('invalid_token_file')
         self.timeout = timeout
+        self.expires_at = expires_at
         self.opener = urllib.request.build_opener(NoRedirects(), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
 
     def _request(self, path, value=None):
+        if self.expires_at is not None and time.time() >= self.expires_at:
+            raise SyncError('temporary_endpoint_expired')
         headers = {'Authorization': 'Bearer ' + self.token, 'Accept': 'application/json'}
         raw = None
         if value is not None:
@@ -277,10 +283,11 @@ def main(argv=None):
     parser.add_argument('--allow-lan-http', action='store_true', help='Explicit private/LAN HTTP test mode only')
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--interval', type=float, default=10)
+    parser.add_argument('--expires-at', type=float, help='Unix expiry for a temporary server address; no requests after this time')
     args = parser.parse_args(argv)
     if not 1 <= args.interval <= 3600: parser.error('Interval must be between 1 and 3600 seconds')
     try:
-        remote = HotwordHTTPClient(args.endpoint, args.token_file, allow_lan_http=args.allow_lan_http)
+        remote = HotwordHTTPClient(args.endpoint, args.token_file, allow_lan_http=args.allow_lan_http, expires_at=args.expires_at)
         sync = HotwordSynchronizer(args.desktop_hot_file, args.state_dir, remote, enable_desktop_save=args.enable_desktop_save)
         with sync.process_lock():
             failures, last_status = 0, None
@@ -293,6 +300,9 @@ def main(argv=None):
                     delay = args.interval
                 except (SyncError, OSError) as error:
                     code = error.code if isinstance(error, SyncError) else 'io_failed'
+                    if code == 'temporary_endpoint_expired':
+                        print('hotword-sync: temporary_endpoint_expired', flush=True)
+                        return 0
                     status = 'error:' + code
                     if status != last_status: print('hotword-sync: ' + status, file=sys.stderr, flush=True)
                     last_status = status

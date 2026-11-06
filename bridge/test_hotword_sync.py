@@ -194,6 +194,18 @@ class HotwordSyncHTTPTests(unittest.TestCase):
             with self.assertRaises(SyncError): HotwordHTTPClient(url, self.token_file)
         with self.assertRaises(SyncError): HotwordHTTPClient('http://8.8.8.8', self.token_file, allow_lan_http=True)
 
+    def test_expired_temporary_address_sends_no_request(self):
+        class NeverOpen:
+            def open(self, *args, **kwargs): raise AssertionError('Expired address contacted')
+        client = HotwordHTTPClient('https://192.0.2.1', self.token_file, expires_at=1)
+        client.opener = NeverOpen()
+        for operation in [client.read, lambda: client.save('0' * 64, 'example')]:
+            with self.assertRaises(SyncError) as error: operation()
+            self.assertEqual(error.exception.code, 'temporary_endpoint_expired')
+        for invalid in [float('nan'), float('inf'), 0, -1]:
+            with self.assertRaises(SyncError):
+                HotwordHTTPClient('https://192.0.2.1', self.token_file, expires_at=invalid)
+
     def test_real_backend_get_and_revision_checked_save(self):
         source = self.root / 'server'; source.mkdir(); (source / 'hot.txt').write_text('原词\n', encoding='utf-8')
         store = HotwordStore(source, self.root / 'server-backups', writable=True)
