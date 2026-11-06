@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from hotwords import HotwordStore, HotwordError
 
 
@@ -77,6 +78,27 @@ class HotwordTests(unittest.TestCase):
         file = self.hot()
         self.store.save('hot', file['revision'], file['text'])
         self.assertFalse(self.state.exists())
+
+    def test_single_file_permission_mode_preserves_file_and_backup(self):
+        self.store.inplace = True
+        path = self.source / 'hot.txt'
+        before = self.hot(); inode = path.stat().st_ino; original = path.read_bytes()
+        self.store.save('hot', before['revision'], '长词条🧑🏽‍💻\n')
+        self.assertEqual(path.stat().st_ino, inode)
+        self.assertEqual(self.hot()['text'], '长词条🧑🏽‍💻\n')
+        self.assertEqual(next(self.state.glob('hot.*.txt')).read_bytes(), original)
+        self.store.save('hot', self.hot()['revision'], '短')
+        self.assertEqual(path.read_bytes(), '短'.encode())
+        self.assertEqual(list(self.source.iterdir()), [path])
+
+    def test_single_file_permission_mode_rolls_back_failed_flush(self):
+        self.store.inplace = True
+        before = self.hot(); original = (self.source / 'hot.txt').read_bytes()
+        with patch('hotwords.os.fsync', side_effect=[OSError('simulated device error'), None]):
+            with self.assertRaises(OSError):
+                self.store.save('hot', before['revision'], '新词')
+        self.assertEqual(self.hot(), before)
+        self.assertEqual(next(self.state.glob('hot.*.txt')).read_bytes(), original)
 
 
 if __name__ == '__main__': unittest.main()

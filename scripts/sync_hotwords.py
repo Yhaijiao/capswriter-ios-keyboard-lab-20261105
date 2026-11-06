@@ -137,7 +137,7 @@ class HotwordHTTPClient:
 
 
 class HotwordSynchronizer:
-    def __init__(self, desktop_hot_file, state_dir, remote, *, enable_desktop_save=False):
+    def __init__(self, desktop_hot_file, state_dir, remote, *, enable_desktop_save=False, desktop_inplace_save=False):
         self.path = canonical_path(desktop_hot_file, 'linked_desktop_path_rejected')
         if self.path.name != 'hot.txt': raise SyncError('desktop_filename_must_be_hot_txt')
         self.state_dir = canonical_path(state_dir, 'linked_state_path_rejected')
@@ -146,7 +146,7 @@ class HotwordSynchronizer:
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.remote = remote
         self.enable_desktop_save = enable_desktop_save
-        self.local_store = HotwordStore(self.path.parent, self.state_dir / 'backups', writable=enable_desktop_save)
+        self.local_store = HotwordStore(self.path.parent, self.state_dir / 'backups', writable=enable_desktop_save, inplace=desktop_inplace_save)
         self.state_file = self.state_dir / 'state.json'
         if self.state_file.is_symlink(): raise SyncError('linked_state_path_rejected')
         binding = str(self.path) + '\0' + remote.endpoint
@@ -280,6 +280,7 @@ def main(argv=None):
     parser.add_argument('--desktop-hot-file', type=Path, required=True)
     parser.add_argument('--state-dir', type=Path, required=True)
     parser.add_argument('--enable-desktop-save', action='store_true')
+    parser.add_argument('--desktop-inplace-save', action='store_true', help='Explicit single-file permission mode: locked write with backup/rollback, instead of directory rename')
     parser.add_argument('--allow-lan-http', action='store_true', help='Explicit private/LAN HTTP test mode only')
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--interval', type=float, default=10)
@@ -288,7 +289,7 @@ def main(argv=None):
     if not 1 <= args.interval <= 3600: parser.error('Interval must be between 1 and 3600 seconds')
     try:
         remote = HotwordHTTPClient(args.endpoint, args.token_file, allow_lan_http=args.allow_lan_http, expires_at=args.expires_at)
-        sync = HotwordSynchronizer(args.desktop_hot_file, args.state_dir, remote, enable_desktop_save=args.enable_desktop_save)
+        sync = HotwordSynchronizer(args.desktop_hot_file, args.state_dir, remote, enable_desktop_save=args.enable_desktop_save, desktop_inplace_save=args.desktop_inplace_save)
         with sync.process_lock():
             failures, last_status = 0, None
             while True:

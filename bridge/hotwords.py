@@ -4,6 +4,7 @@ Only hot.txt is writable, and only when the local operator enables it. Backups
 and temporary files stay in the configured private state directory.
 """
 from __future__ import annotations
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -22,11 +23,12 @@ class HotwordError(ValueError):
 
 
 class HotwordStore:
-    def __init__(self, source_root, state_root, *, writable=False, validate=None):
+    def __init__(self, source_root, state_root, *, writable=False, validate=None, inplace=False):
         self.source_root = Path(source_root).resolve()
         self.state_root = Path(state_root).resolve()
         self.writable = writable
         self.validate = validate
+        self.inplace = inplace
         self.lock = threading.RLock()
 
     def _path(self, file_id):
@@ -79,6 +81,9 @@ class HotwordStore:
                     with backup.open('xb') as stream: stream.write(old)
                 except FileExistsError:
                     if backup.read_bytes() != old: raise HotwordError(500, 'Backup conflict; original preserved')
+                if self.inplace:
+                    self._save_existing_file(target, current, old, raw)
+                    return self.read()
                 temp = None
                 try:
                     with tempfile.NamedTemporaryFile(dir=self.state_root, prefix='hot-save-', delete=False) as stream:
@@ -87,3 +92,34 @@ class HotwordStore:
                 finally:
                     if temp is not None and temp.exists(): temp.unlink()
             return self.read()
+
+    def _save_existing_file(self, target, revision, old, raw):
+        # Explicit single-file permission mode. Creates nothing in the source
+        # directory; preserves the existing file and its ACL. Cloud/default saves
+        # continue to use atomic replacement instead.
+        with target.open('r+b') as stream, self._file_lock(stream, max(len(old), len(raw), 1)):
+            if hashlib.sha256(stream.read()).hexdigest() != revision:
+                raise HotwordError(409, '词库已在其他位置修改，请重新加载后再保存。')
+            try:
+                stream.seek(0); stream.write(raw); stream.truncate(); stream.flush(); os.fsync(stream.fileno())
+            except OSError:
+                # The content-addressed original backup already exists, even if
+                # the device also fails while attempting this immediate rollback.
+                stream.seek(0); stream.write(old); stream.truncate(); stream.flush(); os.fsync(stream.fileno())
+                raise
+
+    @staticmethod
+    @contextmanager
+    def _file_lock(stream, length):
+        stream.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, length)
+            try: yield
+            finally:
+                stream.seek(0); msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, length)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try: yield
+            finally: fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
