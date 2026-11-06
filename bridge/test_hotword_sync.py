@@ -39,7 +39,7 @@ class FakeRemote:
 class HotwordSyncTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.desktop = self.root / 'desktop'; self.desktop.mkdir()
         self.file = self.desktop / 'hot.txt'; self.file.write_bytes(b'CapsWriter\n')
         self.state = self.root / 'private-state'
@@ -182,7 +182,7 @@ def serve(handler):
 
 class HotwordSyncHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
         self.token = 'test-only-hotword-token-1234567890'
         self.token_file = self.root / 'token.txt'; self.token_file.write_text(self.token)
 

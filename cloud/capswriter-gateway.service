@@ -15,7 +15,10 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/srv/capswriter/private/desktop /srv/capswriter/private/hotword-backups
+# A shared writable mount is required for atomic rename from backups to hot.txt.
+# Separate writable bind mounts make that rename fail with EXDEV.
+ReadWritePaths=/srv/capswriter/private
+ReadOnlyPaths=/srv/capswriter/private/bridge-token.txt /srv/capswriter/private/desktop/core /srv/capswriter/private/desktop/models /srv/capswriter/private/desktop/config_client.py /srv/capswriter/private/desktop/config_server.py /srv/capswriter/private/desktop/private-manifest.json
 ProtectHome=true
 StandardOutput=null
 StandardError=null
