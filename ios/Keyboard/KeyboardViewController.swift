@@ -9,6 +9,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var mode: Mode = .voice
     private var shifted = false
     private var symbols = false
+    private var extraSymbols = false
     private var composition = ""
     private lazy var pinyin = PinyinEngine()
     private let content = UIStackView()
@@ -167,7 +168,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let next = Mode(rawValue: (mode.rawValue + (index == 2 ? 1 : 2)) % 3) ?? .voice
         if mode == .pinyin && next != .pinyin { commitComposition() }
         if mode == .voice && next != .voice && ["pending", "recording"].contains(voiceState) { cancelVoice() }
-        mode = next; shifted = false; symbols = false; render()
+        mode = next; shifted = false; symbols = false; extraSymbols = false; render()
     }
     private func row(_ views: [UIView], equal: Bool = true) -> UIStackView {
         let row = UIStackView(arrangedSubviews: views); row.spacing = 5
@@ -462,7 +463,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         resetVoice("录音已取消 · 点击重新开始")
     }
     private func renderLetters(mode: Mode, content: UIStackView) {
-        let layouts = symbols ? ["1234567890", "-/:;()$&@\"", ".,?!'%+=|"] : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+        let punctuation = mode == .pinyin ? "。，？！、" : ".,?!'"
+        let layouts = symbols ? (extraSymbols ? ["[]{}#%^*+=", "_\\|~<>€£¥•", punctuation] : ["1234567890", "-/:;()$&@\"", punctuation]) : ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
         var letterWidth: NSLayoutDimension?
         var sizingConstraints: [NSLayoutConstraint] = []
         for (index, line) in layouts.enumerated() {
@@ -477,6 +479,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 shift.accessibilityLabel = mode == .pinyin ? "切换到英文" : "大小写切换"
                 shiftButton = shift
                 buttons.append(shift)
+            }
+            if index == 2 && symbols {
+                let more = key(extraSymbols ? "123" : "#+=") { [weak self] in
+                    guard let self = self else { return }; self.extraSymbols.toggle(); self.render()
+                }
+                more.accessibilityIdentifier = "keyboard-symbol-page"
+                more.accessibilityLabel = extraSymbols ? "返回数字符号" : "更多符号"
+                buttons.append(more)
             }
             for letter in line {
                 let title = !symbols && mode == .english && shifted ? String(letter).uppercased() : String(letter)
@@ -500,8 +510,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // attached to this page before any inter-key sizing is activated.
         NSLayoutConstraint.activate(sizingConstraints)
         let number = key(symbols ? "ABC" : "123") { [weak self] in
-            guard let self = self else { return }; self.commitComposition(); self.symbols.toggle(); self.render()
+            guard let self = self else { return }; self.commitComposition(); self.symbols.toggle(); self.extraSymbols = false; self.render()
         }
+        number.accessibilityIdentifier = "keyboard-number-toggle"
         number.widthAnchor.constraint(equalToConstant: 74).isActive = true
         let space = key(mode == .pinyin ? "拼" : "EN") { [weak self] in self?.space() }
         space.accessibilityLabel = "空格 / 选字"

@@ -132,6 +132,17 @@ final class KeyboardLayoutTests: XCTestCase {
         space.sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "我们。", "Composition commit counts as the first space tap")
         XCTAssertEqual(editor.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor, UIColor.white)
+        visibleButton("keyboard-number-toggle", in: root).sendActions(for: .primaryActionTriggered)
+        visibleButton("key-1", in: root).sendActions(for: .primaryActionTriggered)
+        visibleButton("keyboard-symbol-page", in: root).sendActions(for: .primaryActionTriggered)
+        for symbol in ["+", "=", "[", "€"] {
+            visibleButton("key-" + symbol, in: root).sendActions(for: .primaryActionTriggered)
+        }
+        XCTAssertEqual(editor.text, "我们。1+=[€")
+        visibleButton("keyboard-symbol-page", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertNotNil(visibleButton("key-1", in: root))
+        visibleButton("keyboard-number-toggle", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertNotNil(visibleButton("key-q", in: root))
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }
