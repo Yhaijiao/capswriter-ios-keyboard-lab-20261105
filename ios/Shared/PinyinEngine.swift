@@ -22,7 +22,7 @@ final class PinyinEngine {
         var patterns = syllables.isEmpty ? lexicon : syllables
         // Public everyday phrases absent from the small bundled dictionary.
         let supplements = ["shu'nv": ["淑女", "熟女"], "kong'ge": ["空格"],
-                           "shuang'ji": ["双击"], "ju'hao": ["句号"]]
+                           "shuang'ji": ["双击"], "ju'hao": ["句号"], "ni'hao'ma": ["你好吗", "你好嘛", "你好妈"]]
         for (pattern, words) in supplements {
             patterns[pattern] = words + (patterns[pattern] ?? []).filter { !words.contains($0) }
         }
@@ -108,8 +108,12 @@ final class PinyinEngine {
             append(ranked(paths[letters.count], limit: 16), consumed: letters.count, limit: 6 - result.count)
         }
         // A small number of useful phrase prefixes, then ample single characters.
+        let exactHeadLength = root.children.compactMap { syllable, node -> Int? in
+            let chars = Array(syllable)
+            return chars.count <= letters.count && Array(letters.prefix(chars.count)) == chars && node.words.contains(where: { $0.text.count == 1 }) ? chars.count : nil
+        }.max() ?? 0
         var phrasePrefixes = 0
-        for end in prefixes.keys.sorted(by: >) where end < letters.count {
+        for end in prefixes.keys.sorted(by: >) where end < letters.count && end >= exactHeadLength {
             guard phrasePrefixes < 2 else { break }
             let choices = ranked((prefixes[end] ?? []).filter { $0.text.count > 1 }, limit: 2 - phrasePrefixes)
             let before = result.count
