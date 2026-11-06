@@ -31,7 +31,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()
     private let voiceStatus = Lab.label("语音会话未开启 · 麦克风关闭", size: 14, color: Lab.muted)
-    private let status = Lab.label("未连接电脑 · 基本键盘输入无需联网", size: 14, color: Lab.muted)
+    private let status = Lab.label("未连接识别服务 · 基本键盘输入无需联网", size: 14, color: Lab.muted)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -61,7 +61,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let title = Lab.label("你的声音，\n从这里开始。", size: 34)
         title.font = .boldSystemFont(ofSize: 34)
         stack.addArrangedSubview(title)
-        stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n语音由手机采集，在自己的电脑识别。支持英文输入、离线全拼组合与三页滑动切换。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n手机采集语音，交给你配对的识别服务处理。支持英文输入、离线拼音与三页滑动切换。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("1  启用键盘", size: 21))
         stack.addArrangedSubview(Lab.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → CapsWriter Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.button("打开 App 设置", symbol: "gearshape") {
@@ -78,25 +78,26 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         editor.heightAnchor.constraint(equalToConstant: 160).isActive = true
         stack.addArrangedSubview(editor)
         stack.addArrangedSubview(Lab.button("清空测试区", symbol: "trash") { [weak self] in self?.editor.text = "" })
-        stack.addArrangedSubview(Lab.label("3  连接自己的电脑", size: 21))
-        stack.addArrangedSubview(Lab.label("电脑开启 CapsWriter 识别服务和语音桥接后，填入局域网地址与配对码。手机复用电脑模型、数字处理、热词和纠正规则。电脑修改热词后，下次请求自动重载。", size: 15, color: Lab.muted))
-        configure(address, placeholder: "http://192.168.1.20:8765", key: "bridge.address")
-        configure(token, placeholder: "电脑端配对码", key: "bridge.token")
+        stack.addArrangedSubview(Lab.label("3  连接识别服务", size: 21))
+        stack.addArrangedSubview(Lab.label("可连接家中电脑或自己的云端识别服务。局域网地址例如 http://192.168.1.20:8765；公网地址必须使用 HTTPS。填入服务地址和配对码后，手机复用该服务的模型、热词和纠正规则。", size: 15, color: Lab.muted))
+        configure(address, placeholder: "http://局域网IP 或 https://服务器IP", key: "bridge.address")
+        address.keyboardType = .URL
+        configure(token, placeholder: "识别服务配对码", key: "bridge.token")
         token.isSecureTextEntry = true
         stack.addArrangedSubview(address); stack.addArrangedSubview(token)
-        stack.addArrangedSubview(Lab.button("检查电脑词库版本", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
+        stack.addArrangedSubview(Lab.button("检查服务词库版本", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
         stack.addArrangedSubview(Lab.button("复制配对配置，交给键盘", symbol: "doc.on.doc") { [weak self] in
             guard let self = self else { return }
-            self.savePairing()
+            guard self.savePairing() else { return }
             let value = ["address": self.address.text ?? "", "token": self.token.text ?? ""]
             guard let data = try? JSONSerialization.data(withJSONObject: value),
                   let text = String(data: data, encoding: .utf8) else { return }
             UIPasteboard.general.setItems([["public.utf8-plain-text": "cwlab:v1:" + text]],
                                           options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(300)])
-            self.status.text = "配对配置已复制，5 分钟后过期。切换键盘 → 电脑 → 粘贴配对配置。"
+            self.status.text = "配对配置已复制，5 分钟后过期。键盘 → 热词 → 齿轮 → 粘贴配对配置。"
             self.beginAutomaticSessionIfNeeded()
         })
-        stack.addArrangedSubview(Lab.button("用电脑规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
+        stack.addArrangedSubview(Lab.button("用服务规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
         stack.addArrangedSubview(Lab.label("保存配对配置后，打开 Lab 自动开启 10 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Lab.muted))
@@ -113,7 +114,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(duration)
         stack.addArrangedSubview(Lab.button("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
             guard let self = self else { return }
-            self.view.endEditing(true); self.savePairing()
+            self.view.endEditing(true)
+            guard self.savePairing() else { return }
             self.autoStartPolicy.userStoppedOrStarted()
             let minutes = [10, 30, 60][max(0, min(2, self.duration.selectedSegmentIndex))]
             UserDefaults.standard.set(minutes, forKey: "voice.sessionMinutes")
@@ -129,7 +131,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(voiceStatus)
         stack.addArrangedSubview(Lab.label("5  免费安装与续签", size: 21))
         stack.addArrangedSubview(Lab.label("使用同一个 Apple 账号和相同 Bundle ID 续签。Sideloadly 中开启自动刷新，电脑保持运行并能找到手机。免费签名每 7 天到期；实际自动刷新需要跨日观察。\n如果过期，重新签名安装；先备份重要测试内容。", size: 15, color: Lab.muted))
-        stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。录音通过已配对的局域网电脑处理，不发到云端；当前局域网传输使用 HTTP，仅在可信的私人网络测试。主 App 与键盘设置独立，不依赖 App Groups。", size: 13, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网连接使用 HTTPS；局域网 HTTP 仅在可信的私人网络使用。热词仅在你点击保存时写回。主 App 与键盘设置独立，不依赖 App Groups。", size: 13, color: Lab.muted))
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
             name: UIResponder.keyboardDidShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
@@ -161,7 +163,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let t = UserDefaults.standard.string(forKey: "bridge.token") ?? ""
         let visible = isViewLoaded && view.window != nil && UIApplication.shared.applicationState == .active
         guard autoStartPolicy.shouldStart(enabled: automaticSession.isOn,
-            configured: !a.isEmpty && !t.isEmpty, foreground: visible,
+            configured: BridgeEndpoint(address: a) != nil && BridgeClient.isValidToken(t), foreground: visible,
             busy: voice.active || voice.starting) else { return }
         voice.start(address: a, token: t, sessionMinutes: 10)
     }
@@ -185,22 +187,20 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let values = parts.queryItems ?? []
         guard let a = values.first(where: { $0.name == "address" })?.value,
               let t = values.first(where: { $0.name == "token" })?.value,
-              t.count >= 24, t.count <= 128,
-              let target = URLComponents(string: a), target.scheme == "http",
-              target.user == nil, target.password == nil,
-              let host = target.host, BridgeClient.isLocal(host) else { return }
-        let alert = UIAlertController(title: "连接你的电脑", message: "地址：\(a)\n仅在这是你自己的电脑时确认。语音片段和测试文字将发送到这台电脑。", preferredStyle: .alert)
+              t.count >= 24, t.count <= 128, BridgeClient.isValidToken(t),
+              let endpoint = BridgeEndpoint(address: a) else { return }
+        let alert = UIAlertController(title: "连接识别服务", message: "服务器：\(endpoint.normalizedAddress)\n语音片段、测试文字和热词管理请求将发送到这个服务。请确认这是你自己的服务器。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "使用此电脑", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "使用此服务", style: .default) { [weak self] _ in
             guard let self = self else { return }
-            self.voice.stop(); self.address.text = a; self.token.text = t
-            self.savePairing(); self.connect(correct: false)
+            self.voice.stop(); self.address.text = endpoint.normalizedAddress; self.token.text = t
+            self.connect(correct: false)
         })
         present(alert, animated: true)
     }
     private func connect(correct: Bool) {
+        guard savePairing() else { return }
         let a = address.text ?? "", t = token.text ?? ""
-        savePairing()
         status.text = "正在连接…"
         BridgeClient.request(address: a, token: t, text: correct ? editor.text : nil) { [weak self] result in
             guard let self = self else { return }
@@ -213,9 +213,16 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             }
         }
     }
-    private func savePairing() {
-        let a = (address.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    @discardableResult private func savePairing() -> Bool {
+        let rawAddress = (address.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let t = (token.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let endpoint = BridgeEndpoint(address: rawAddress) else {
+            status.text = BridgeError.invalidAddress.localizedDescription; return false
+        }
+        guard BridgeClient.isValidToken(t) else {
+            status.text = BridgeError.invalidToken.localizedDescription; return false
+        }
+        let a = endpoint.normalizedAddress
         let changed = a != (UserDefaults.standard.string(forKey: "bridge.address") ?? "")
             || t != (UserDefaults.standard.string(forKey: "bridge.token") ?? "")
         if changed {
@@ -225,5 +232,6 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         address.text = a; token.text = t
         UserDefaults.standard.set(a, forKey: "bridge.address")
         UserDefaults.standard.set(t, forKey: "bridge.token")
+        return true
     }
 }
