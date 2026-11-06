@@ -27,12 +27,16 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let address = UITextField()
     private let token = UITextField()
     private let voice = VoiceSession()
+    private let automaticSession = UISwitch()
+    private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
+    private var autoStartPolicy = VoiceSessionAutoStartPolicy()
     private let voiceStatus = Lab.label("语音会话未开启 · 麦克风关闭", size: 14, color: Lab.muted)
     private let status = Lab.label("未连接电脑 · 基本键盘输入无需联网", size: 14, color: Lab.muted)
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "CapsWriter Lab"
+        UserDefaults.standard.register(defaults: ["voice.autoStart": true])
         view.backgroundColor = Lab.background
         scroll.keyboardDismissMode = .interactive
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -83,30 +87,44 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.button("检查电脑词库版本", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
         stack.addArrangedSubview(Lab.button("复制配对配置，交给键盘", symbol: "doc.on.doc") { [weak self] in
             guard let self = self else { return }
+            self.savePairing()
             let value = ["address": self.address.text ?? "", "token": self.token.text ?? ""]
             guard let data = try? JSONSerialization.data(withJSONObject: value),
                   let text = String(data: data, encoding: .utf8) else { return }
             UIPasteboard.general.setItems([["public.utf8-plain-text": "cwlab:v1:" + text]],
                                           options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(300)])
             self.status.text = "配对配置已复制，5 分钟后过期。切换键盘 → 电脑 → 粘贴配对配置。"
+            self.beginAutomaticSessionIfNeeded()
         })
         stack.addArrangedSubview(Lab.button("用电脑规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
-        stack.addArrangedSubview(Lab.label("先将配对配置交给键盘，并在键盘设置允许完全访问。\n选择会话时间。开启期间麦克风会持续工作，系统显示录音指示；只有在键盘点击开始、停止的片段会提交给电脑，待机声音丢弃。\n切回输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动输入文字。单段最长 5 分钟。", size: 15, color: Lab.muted))
-        let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
+        stack.addArrangedSubview(Lab.label("保存配对配置后，打开 Lab 自动开启 10 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Lab.muted))
+        automaticSession.isOn = UserDefaults.standard.bool(forKey: "voice.autoStart")
+        automaticSession.accessibilityIdentifier = "voice-auto-start"
+        automaticSession.addTarget(self, action: #selector(automaticSessionChanged), for: .valueChanged)
+        let autoRow = UIStackView(arrangedSubviews: [Lab.label("打开 Lab 自动开启 10 分钟", size: 16), automaticSession])
+        autoRow.axis = .horizontal; autoRow.spacing = 12; autoRow.alignment = .center
+        stack.addArrangedSubview(autoRow)
+        stack.addArrangedSubview(Lab.label("也可手动选择时长并重新开启：", size: 14, color: Lab.muted))
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
         duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 0
         duration.accessibilityIdentifier = "voice-session-duration"
         stack.addArrangedSubview(duration)
-        stack.addArrangedSubview(Lab.button("开启语音会话", symbol: "mic.fill") { [weak self, weak duration] in
+        stack.addArrangedSubview(Lab.button("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
             guard let self = self else { return }
             self.view.endEditing(true); self.savePairing()
-            let minutes = [10, 30, 60][max(0, min(2, duration?.selectedSegmentIndex ?? 0))]
+            self.autoStartPolicy.userStoppedOrStarted()
+            let minutes = [10, 30, 60][max(0, min(2, self.duration.selectedSegmentIndex))]
             UserDefaults.standard.set(minutes, forKey: "voice.sessionMinutes")
+            if self.voice.active || self.voice.starting { self.voice.stop(message: "正在重新开启语音会话…") }
             self.voice.start(address: self.address.text ?? "", token: self.token.text ?? "", sessionMinutes: minutes)
         })
-        stack.addArrangedSubview(Lab.button("关闭语音会话", symbol: "stop.circle") { [weak self] in self?.voice.stop() })
+        stack.addArrangedSubview(Lab.button("关闭本次语音会话", symbol: "stop.circle") { [weak self] in
+            guard let self = self else { return }
+            self.autoStartPolicy.userStoppedOrStarted()
+            self.voice.stop(message: self.automaticSession.isOn ? "本次语音会话已关闭。重新打开 Lab 时会自动开启；也可关闭上方自动开关。" : "语音会话已关闭，麦克风已停止。")
+        })
         voice.onStatus = { [weak self] text in self?.voiceStatus.text = text }
         stack.addArrangedSubview(voiceStatus)
         stack.addArrangedSubview(Lab.label("5  免费安装与续签", size: 21))
@@ -116,6 +134,36 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             name: UIResponder.keyboardDidShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
             name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appEnteredBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        beginAutomaticSessionIfNeeded()
+    }
+
+    @objc private func appBecameActive() { beginAutomaticSessionIfNeeded() }
+    @objc private func appEnteredBackground() { autoStartPolicy.enteredBackground() }
+    @objc private func automaticSessionChanged() {
+        UserDefaults.standard.set(automaticSession.isOn, forKey: "voice.autoStart")
+        if automaticSession.isOn {
+            autoStartPolicy.configurationChanged(); beginAutomaticSessionIfNeeded()
+        } else {
+            autoStartPolicy.userStoppedOrStarted()
+            voice.stop(message: "自动开启已关闭，麦克风已停止。需要时可手动开启。")
+        }
+    }
+    private func beginAutomaticSessionIfNeeded() {
+        let a = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
+        let t = UserDefaults.standard.string(forKey: "bridge.token") ?? ""
+        let visible = isViewLoaded && view.window != nil && UIApplication.shared.applicationState == .active
+        guard autoStartPolicy.shouldStart(enabled: automaticSession.isOn,
+            configured: !a.isEmpty && !t.isEmpty, foreground: visible,
+            busy: voice.active || voice.starting) else { return }
+        voice.start(address: a, token: t, sessionMinutes: 10)
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) { revealEditor() }
@@ -160,12 +208,21 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             case .success(let reply):
                 self.status.text = "模式：\(reply.mode ?? "未知")\n词库：\(reply.version ?? "未知")\n算法：\(reply.source_version ?? "未知")\n词条：\(reply.terms ?? 0)\n语音桥接：\(reply.voice_enabled == true ? "已启用" : "未启用") · 识别服务：\(reply.asr_ready == true ? "可连接" : "未连接")"
                 if correct, let text = reply.text { self.editor.text = text }
+                if !correct { self.beginAutomaticSessionIfNeeded() }
             case .failure(let error): self.status.text = error.localizedDescription
             }
         }
     }
     private func savePairing() {
-        let a = address.text ?? "", t = token.text ?? ""
+        let a = (address.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = (token.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let changed = a != (UserDefaults.standard.string(forKey: "bridge.address") ?? "")
+            || t != (UserDefaults.standard.string(forKey: "bridge.token") ?? "")
+        if changed {
+            voice.stop(message: "连接配置已更新，正在准备新的语音会话。")
+            autoStartPolicy.configurationChanged()
+        }
+        address.text = a; token.text = t
         UserDefaults.standard.set(a, forKey: "bridge.address")
         UserDefaults.standard.set(t, forKey: "bridge.token")
     }

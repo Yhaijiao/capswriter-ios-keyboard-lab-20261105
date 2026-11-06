@@ -2,11 +2,12 @@ import AVFoundation
 import UIKit
 
 // The containing app owns the microphone. No App Groups or private URL APIs.
-// An explicitly armed session records in the background for a chosen duration.
+// A foreground app action or enabled auto-start preference arms a timed session.
 // Idle audio is discarded; only a keyboard-requested segment is held in memory.
 final class VoiceSession {
     var onStatus: ((String) -> Void)?
     private(set) var active = false
+    private(set) var starting = false
     private let audio = AVAudioEngine()
     private let lock = NSLock()
     private var converter: AVAudioConverter?
@@ -35,26 +36,42 @@ final class VoiceSession {
     }
 
     func start(address: String, token: String, sessionMinutes: Int = 10) {
-        guard !active else { return }
+        guard !active, !starting else { return }
+        starting = true
         let request = UUID(); generation = request
         onStatus?("正在检查电脑连接…")
         BridgeClient.request(address: address, token: token) { [weak self] response in
             guard let self = self, self.generation == request else { return }
             switch response {
-            case .failure(let error): self.onStatus?(error.localizedDescription)
+            case .failure(let error):
+                self.starting = false; self.onStatus?(error.localizedDescription)
             case .success(let reply):
                 guard reply.voice_enabled == true, reply.asr_ready == true else {
+                    self.starting = false
                     self.onStatus?("请启动电脑 CapsWriter 识别服务和新版语音桥接。")
                     return
                 }
                 guard (reply.max_seconds ?? 60) >= Lab.maxRecordingSeconds else {
+                    self.starting = false
                     self.onStatus?("请先运行新版 v0.4 电脑语音桥接，再开启 5 分钟录音。")
+                    return
+                }
+                if AVAudioApplication.shared.recordPermission == .granted {
+                    self.arm(address: address, token: token, sessionMinutes: sessionMinutes)
+                    return
+                }
+                if AVAudioApplication.shared.recordPermission == .denied {
+                    self.starting = false
+                    self.onStatus?("请在 App 设置中允许麦克风后重试。")
                     return
                 }
                 AVAudioApplication.requestRecordPermission { [weak self] allowed in
                     DispatchQueue.main.async {
                         guard let self = self, self.generation == request else { return }
-                        guard allowed else { self.onStatus?("请在 App 设置中允许麦克风后重试。"); return }
+                        guard allowed else {
+                            self.starting = false
+                            self.onStatus?("请在 App 设置中允许麦克风后重试。"); return
+                        }
                         self.arm(address: address, token: token, sessionMinutes: sessionMinutes)
                     }
                 }
@@ -63,6 +80,13 @@ final class VoiceSession {
     }
 
     private func arm(address: String, token: String, sessionMinutes: Int) {
+        // Connection or permission callbacks can arrive after the user leaves
+        // Lab. Complete a fresh microphone start while the app is visible.
+        guard UIApplication.shared.applicationState != .background else {
+            starting = false
+            onStatus?("请回到 Lab 完成开启语音会话。")
+            return
+        }
         self.address = address; self.token = token
         self.sessionMinutes = [10, 30, 60].contains(sessionMinutes) ? sessionMinutes : 10
         do {
@@ -84,7 +108,7 @@ final class VoiceSession {
             }
             tapInstalled = true
             audio.prepare(); try audio.start()
-            active = true; agentID = UUID().uuidString
+            active = true; starting = false; agentID = UUID().uuidString
             expires = Date().addingTimeInterval(TimeInterval(self.sessionMinutes * 60)); lastSuccess = Date()
             lock.lock(); lastFrames = Date(); lock.unlock()
             let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in self?.poll() }
@@ -176,7 +200,7 @@ final class VoiceSession {
 
     func stop(message: String = "语音会话已关闭，麦克风已停止。") {
         generation = UUID(); timer?.invalidate(); timer = nil
-        let wasActive = active; active = false; polling = false; uploading = false
+        let wasActive = active; active = false; starting = false; polling = false; uploading = false
         audio.stop()
         if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false }
         converter = nil
