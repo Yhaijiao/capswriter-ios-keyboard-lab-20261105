@@ -118,7 +118,9 @@ final class KeyboardLayoutTests: XCTestCase {
         await waitForCandidate("candidate-我们", in: root)
         visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
         host.view.layoutIfNeeded(); root.layoutIfNeeded()
-        visibleButton("grid-candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertFalse(descendants(root).contains { $0.accessibilityIdentifier == "grid-candidate-我们" })
+        XCTAssertNotNil(visibleButton("grid-candidate-我妈", in: root))
+        visibleButton("candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n我们", "Pinyin selection edits the hotword draft")
         visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(editor.text, "开始\n我们\n")
@@ -165,6 +167,51 @@ final class KeyboardLayoutTests: XCTestCase {
         }
         let attachment = XCTAttachment(image: image)
         attachment.name = "Hotword editor with internal keyboard"; attachment.lifetime = .keepAlways; add(attachment)
+        visibleButton("candidate-你好", in: root).sendActions(for: .primaryActionTriggered)
+        let priorDraft = editor.text ?? ""
+        for letter in "womendouyouyigejia" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        await waitForCandidate("candidate-我们都有一个家", in: root)
+        XCTAssertEqual(editor.text, priorDraft, "A suggestion must not insert text before selection")
+        visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        XCTAssertFalse(descendants(root).contains { $0.accessibilityIdentifier == "grid-candidate-我们都有一个家" })
+        visibleButton("grid-candidate-我们", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, priorDraft + "我们")
+        XCTAssertEqual(label.text, "douyouyigejia", "A word selection must retain the unmatched spelling")
+        space.sendActions(for: .primaryActionTriggered)
+
+        let longSpelling = String(repeating: "nihao", count: 11)
+        for letter in longSpelling { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        let scroll = descendants(root).first { $0.accessibilityIdentifier == "pinyin-candidates" } as! UIScrollView
+        func stripButtons() -> [UIButton] {
+            descendants(scroll).compactMap { $0 as? UIButton }.filter { !$0.isHidden }
+        }
+        for _ in 0..<600 {
+            if !stripButtons().isEmpty { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        XCTAssertEqual(label.text, longSpelling)
+        let buttons = stripButtons()
+        XCTAssertGreaterThan(buttons.count, 1)
+        XCTAssertGreaterThan(buttons.first?.title(for: .normal)?.count ?? 0, 15)
+        for button in buttons {
+            XCTAssertGreaterThan(button.bounds.width, 0)
+            XCTAssertLessThanOrEqual(button.bounds.width, scroll.bounds.width + 1)
+            XCTAssertEqual(button.titleLabel?.numberOfLines, 1)
+            XCTAssertEqual(button.titleLabel?.lineBreakMode, .byTruncatingTail)
+        }
+        for (previous, next) in zip(buttons, buttons.dropFirst()) {
+            XCTAssertLessThanOrEqual(previous.frame.maxX, next.frame.minX + 0.5, "Candidate controls must not overlap")
+        }
+        visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(stripButtons().count, 1, "The expanded header must show just the primary suggestion")
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        let focusedImage = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
+            root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
+        }
+        let focusedAttachment = XCTAttachment(image: focusedImage)
+        focusedAttachment.name = "Long pinyin primary and short alternatives"; focusedAttachment.lifetime = .keepAlways; add(focusedAttachment)
     }
 
     @MainActor func testHotwordBrowserRespectsWritableFileFlag() {

@@ -97,20 +97,26 @@ final class PinyinEngine {
                 paths[end] = ranked(paths[end], limit: beamLimit * 2)
             }
         }
+        let fullWords = ranked(prefixes[letters.count] ?? [], limit: 6)
+        let sentences = ranked(paths[letters.count], limit: beamLimit)
+        let primary = fullWords.first ?? sentences.first
+        let focused = (primary?.text.count ?? 0) > 4 || (primary == nil && letters.count >= 8)
+        let resultLimit = focused ? 20 : 40
         var result: [PinyinCandidate] = []
         func append(_ choices: [Choice], consumed: Int, limit: Int) {
-            guard limit > 0 else { return }
+            guard limit > 0, result.count < resultLimit else { return }
             var added = 0
             for choice in choices where !result.contains(where: { $0.text == choice.text }) {
                 result.append(PinyinCandidate(text: choice.text, consumed: consumed)); added += 1
-                if added >= limit || result.count >= 40 { break }
+                if added >= limit || result.count >= resultLimit { break }
             }
         }
-        // Real dictionary matches come first. Fully spelled words need no
-        // arbitrary combinations; mixed spelling still gets a few sentence guesses.
-        append(ranked(prefixes[letters.count] ?? [], limit: 6), consumed: letters.count, limit: 6)
-        if result.count < 6 && (!exactSpellings.contains(buffer) || result.isEmpty) {
-            append(ranked(paths[letters.count], limit: 16), consumed: letters.count, limit: 6 - result.count)
+        if let primary { append([primary], consumed: letters.count, limit: 1) }
+        if !focused {
+            append(fullWords.filter { $0.text.count <= 4 }, consumed: letters.count, limit: 6 - result.count)
+            if result.count < 6 && (!exactSpellings.contains(buffer) || fullWords.isEmpty) {
+                append(sentences.filter { $0.text.count <= 4 }, consumed: letters.count, limit: 6 - result.count)
+            }
         }
         // A small number of useful phrase prefixes, then ample single characters.
         let exactHeadLength = root.children.compactMap { syllable, node -> Int? in
@@ -120,7 +126,7 @@ final class PinyinEngine {
         var phrasePrefixes = 0
         for end in prefixes.keys.sorted(by: >) where end < letters.count && end >= exactHeadLength {
             guard phrasePrefixes < 2 else { break }
-            let choices = ranked((prefixes[end] ?? []).filter { $0.text.count > 1 }, limit: 2 - phrasePrefixes)
+            let choices = ranked((prefixes[end] ?? []).filter { (2...4).contains($0.text.count) }, limit: 2 - phrasePrefixes)
             let before = result.count
             append(choices, consumed: end, limit: 2 - phrasePrefixes)
             phrasePrefixes += result.count - before
@@ -141,12 +147,12 @@ final class PinyinEngine {
             if !singles.isEmpty { exactSingles.append((end, ranked(singles, limit: 40))) }
         }
         for (end, choices) in exactSingles.sorted(by: { $0.0 > $1.0 }) {
-            guard result.count < 40 else { break }
-            append(choices, consumed: end, limit: 40 - result.count)
+            guard result.count < resultLimit else { break }
+            append(choices, consumed: end, limit: resultLimit - result.count)
         }
         // Initial-only typing also needs single-character alternatives.
-        for end in prefixes.keys.sorted(by: >) where end < letters.count && result.count < 40 {
-            append(ranked((prefixes[end] ?? []).filter { $0.text.count == 1 }, limit: 40), consumed: end, limit: 40 - result.count)
+        for end in prefixes.keys.sorted(by: >) where end < letters.count && result.count < resultLimit {
+            append(ranked((prefixes[end] ?? []).filter { $0.text.count == 1 }, limit: resultLimit), consumed: end, limit: resultLimit - result.count)
         }
         return result
     }

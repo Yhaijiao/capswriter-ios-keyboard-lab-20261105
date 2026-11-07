@@ -49,6 +49,16 @@ struct PinyinSmoke {
         let sentence = engine.candidates(for: "womendouyouyigejia")
         check(sentence.contains { $0.text == "我们都有一个家" && $0.consumed == 18 })
         check(sentence.contains { $0.text == "我们" && $0.consumed == 5 })
+        for input in ["womendouyouyigejia", "sijdhjhs", "wojshsbjdbbsbbdbjsj", String(repeating: "nihao", count: 11)] {
+            let options = engine.candidates(for: input)
+            check(options.first?.consumed == input.count)
+            check((options.first?.text.count ?? 0) > 4)
+            check(options.count <= 20)
+            check(options.dropFirst().allSatisfy { $0.consumed < input.count && $0.text.count <= 4 })
+        }
+        let partial = engine.candidates(for: "jsjjshdbdvjhs")
+        check(!partial.isEmpty && partial.count <= 20)
+        check(partial.dropFirst().allSatisfy { $0.text.count <= 4 })
         check(engine.candidates(for: "wom").count <= 40)
         check(engine.candidates(for: "wm").first == PinyinCandidate(text: "我们", consumed: 2))
         check(engine.candidates(for: "WM").contains { $0.text == "我妈" && $0.consumed == 2 })

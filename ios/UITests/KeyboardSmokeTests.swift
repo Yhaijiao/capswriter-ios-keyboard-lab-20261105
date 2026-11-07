@@ -102,13 +102,14 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["candidate-我妈"].exists)
         attach(app, name: "Unfinished wom predicts women")
         app.buttons["pinyin-expand-candidates"].tap()
-        let gridChoice = app.buttons["grid-candidate-我们"]
+        let gridChoice = app.buttons["grid-candidate-我妈"]
         XCTAssertTrue(gridChoice.waitForExistence(timeout: 5))
         XCTAssertTrue(gridChoice.isHittable)
-        XCTAssertTrue(app.buttons["grid-candidate-我妈"].isHittable)
+        XCTAssertFalse(app.buttons["grid-candidate-我们"].exists)
+        XCTAssertTrue(unfinished.isHittable)
         attach(app, name: "Expanded pinyin candidate grid")
-        gridChoice.tap()
-        XCTAssertFalse(app.buttons["grid-candidate-我们"].isHittable, "Selecting the full composition collapses the grid")
+        unfinished.tap()
+        XCTAssertFalse(gridChoice.isHittable, "Selecting the primary suggestion collapses the grid")
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("你好我们"))
         for letter in "nihaom" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue(app.buttons["candidate-你好吗"].waitForExistence(timeout: 5))

@@ -31,6 +31,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var feedback: UILabel?
     private weak var candidateRow: UIStackView?
     private weak var candidateScroll: UIScrollView?
+    private var candidateWidths: [NSLayoutConstraint] = []
     private weak var compositionLabel: UILabel?
     private let compositionViewport = UIScrollView()
     private var lastSpaceAt = Date.distantPast
@@ -40,7 +41,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private let candidateGridRows = UIStackView()
     private var candidatesExpanded = false
     private var displayedCandidates: [PinyinCandidate] = []
-    private var gridColumns = 0
+    private var gridLayoutWidth: CGFloat = 0
     private weak var switchFooter: UIStackView?
     private var showsSwitchFooter = false
     private weak var hotEditor: UITextView?
@@ -124,8 +125,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         super.viewDidLayoutSubviews()
         let width = pager.bounds.width
         layoutPages(center: width > 0 && abs(width - pageWidth) > 0.5)
-        let columns = view.bounds.width >= 390 ? 4 : 3
-        if columns != gridColumns { gridColumns = columns; rebuildCandidateGrid() }
+        let gridWidth = candidateGrid.bounds.width
+        if candidatesExpanded && gridWidth > 0 && abs(gridWidth - gridLayoutWidth) > 0.5 {
+            rebuildCandidateGrid()
+        }
     }
     private func updatePreferredHeight() {
         showsSwitchFooter = appeared && extensionContext != nil && needsInputModeSwitchKey
@@ -775,7 +778,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func stopDeleting() { deleteTimer?.invalidate(); deleteTimer = nil; deleteGesture = nil }
     private func choose(_ candidate: PinyinCandidate) {
-        guard displayedComposition == composition else { return }
+        guard displayedComposition == composition, displayedCandidates.contains(candidate) else { return }
         insertText(candidate.text)
         composition = String(composition.dropFirst(candidate.consumed)); updateCandidates()
     }
@@ -806,6 +809,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         displayedComposition = ""; displayedCandidates = []
         candidateRow?.arrangedSubviews.forEach { $0.isHidden = true }
         expandCandidatesButton?.isEnabled = false
+        rebuildCandidateGrid()
         guard composing else { return }
         let buffer = composition
         candidateQueue.async { [weak self] in
@@ -823,28 +827,50 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func applyCandidates(_ candidates: [PinyinCandidate], for buffer: String) {
         displayedCandidates = candidates; displayedComposition = buffer
-        guard let row = candidateRow else { return }
-        // Reuse controls instead of allocating and constraining forty new
-        // buttons on every letter. Selection always uses the current buffer.
-        while row.arrangedSubviews.count < candidates.count {
+        refreshCandidateStrip()
+        expandCandidatesButton?.isEnabled = candidatesExpanded || candidates.count > 1
+        rebuildCandidateGrid()
+    }
+    private func candidateButton(grid: Bool, action: @escaping () -> Void) -> UIButton {
+        let button = UIButton(type: .system)
+        button.addAction(UIAction { _ in action() }, for: .primaryActionTriggered)
+        button.setTitleColor(.white, for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: grid ? 20 : 18)
+        button.titleLabel?.numberOfLines = 1
+        button.titleLabel?.lineBreakMode = .byTruncatingTail
+        button.titleLabel?.adjustsFontSizeToFitWidth = false
+        button.clipsToBounds = true
+        button.contentEdgeInsets = UIEdgeInsets(top: 0, left: grid ? 3 : 9, bottom: 0, right: grid ? 3 : 9)
+        button.layer.cornerRadius = grid ? 0 : 16
+        button.backgroundColor = grid ? Lab.background : Lab.surface
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+    private func refreshCandidateStrip() {
+        guard let row = candidateRow, let scroll = candidateScroll else { return }
+        let visibleCount = candidatesExpanded ? min(1, displayedCandidates.count) : displayedCandidates.count
+        while row.arrangedSubviews.count < visibleCount {
             let index = row.arrangedSubviews.count
-            let button = Lab.button("") { [weak self] in
+            let button = candidateButton(grid: false) { [weak self] in
                 guard let self = self, self.displayedComposition == self.composition,
                       self.displayedCandidates.indices.contains(index) else { return }
                 self.choose(self.displayedCandidates[index])
             }
-            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9)
             row.addArrangedSubview(button)
+            let width = button.widthAnchor.constraint(equalToConstant: 36)
+            width.priority = UILayoutPriority(999)
+            NSLayoutConstraint.activate([width, button.widthAnchor.constraint(lessThanOrEqualTo: scroll.frameLayoutGuide.widthAnchor)])
+            candidateWidths.append(width)
         }
         for (index, view) in row.arrangedSubviews.enumerated() {
-            view.isHidden = index >= candidates.count
-            guard let button = view as? UIButton, index < candidates.count else { continue }
-            button.configuration?.title = candidates[index].text
-            button.accessibilityIdentifier = "candidate-" + candidates[index].text
+            guard let button = view as? UIButton, index < visibleCount else { view.isHidden = true; continue }
+            let title = displayedCandidates[index].text
+            button.setTitle(title, for: .normal)
+            candidateWidths[index].constant = max(36, ceil((title as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 18)]).width) + 18)
+            button.accessibilityIdentifier = "candidate-" + title
+            button.isHidden = false
         }
-        expandCandidatesButton?.isEnabled = !displayedCandidates.isEmpty
-        rebuildCandidateGrid()
-        candidateScroll?.setContentOffset(.zero, animated: false)
+        scroll.setContentOffset(.zero, animated: false)
     }
     private func setCandidatesExpanded(_ expanded: Bool) {
         candidatesExpanded = expanded && mode == .pinyin && !composition.isEmpty
@@ -854,6 +880,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         pager.accessibilityElementsHidden = candidatesExpanded
         expandCandidatesButton?.configuration?.image = UIImage(systemName: candidatesExpanded ? "chevron.up" : "chevron.down")
         expandCandidatesButton?.accessibilityLabel = candidatesExpanded ? "收起候选词" : "展开全部候选词"
+        refreshCandidateStrip()
         if candidatesExpanded { rebuildCandidateGrid(); candidateGrid.setContentOffset(.zero, animated: false) }
     }
     private func rebuildCandidateGrid() {
@@ -862,7 +889,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             candidateGridRows.removeArrangedSubview(view); view.removeFromSuperview()
         }
         let columns = 6
-        let unitWidth = max(1, (view.bounds.width - 24) / CGFloat(columns))
+        gridLayoutWidth = candidateGrid.bounds.width
+        let availableWidth = gridLayoutWidth > 0 ? gridLayoutWidth : view.bounds.width - 24
+        let unitWidth = max(1, availableWidth / CGFloat(columns))
         var buttons: [UIView] = []
         var gridConstraints: [NSLayoutConstraint] = []
         var used = 0
@@ -881,19 +910,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             candidateGridRows.addArrangedSubview(separator)
             buttons = []; used = 0
         }
-        for candidate in displayedCandidates {
-            let span = min(columns, max(1, Int(ceil((CGFloat(candidate.text.count) * 20 + 12) / unitWidth))))
+        for candidate in displayedCandidates.dropFirst() {
+            let titleWidth = (candidate.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 20)]).width
+            let span = min(columns, max(1, Int(ceil((titleWidth + 12) / unitWidth))))
             if used + span > columns { finishRow() }
-            let button = Lab.button(candidate.text) { [weak self] in self?.choose(candidate) }
-            button.configuration?.cornerStyle = .fixed
-            button.configuration?.background.cornerRadius = 0
-            button.configuration?.baseBackgroundColor = Lab.background
-            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 3, bottom: 4, trailing: 3)
-            button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
-                var output = input; output.font = .systemFont(ofSize: 20); return output
-            }
-            button.titleLabel?.adjustsFontSizeToFitWidth = true
-            button.titleLabel?.minimumScaleFactor = 0.85
+            let button = candidateButton(grid: true) { [weak self] in self?.choose(candidate) }
+            button.setTitle(candidate.text, for: .normal)
             button.heightAnchor.constraint(equalToConstant: 44).isActive = true
             gridConstraints.append(button.widthAnchor.constraint(equalTo: candidateGridRows.widthAnchor, multiplier: CGFloat(span) / CGFloat(columns)))
             button.accessibilityIdentifier = "grid-candidate-" + candidate.text
