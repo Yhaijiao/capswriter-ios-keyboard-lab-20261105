@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 
 private final class KeyboardPagingScrollView: UIScrollView {
     override func touchesShouldCancel(in view: UIView) -> Bool { true }
@@ -65,6 +66,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var voiceRevision = UUID()
     private weak var voiceHint: UILabel?
     private weak var voiceButton: UIButton?
+    private weak var voiceContainer: UIView?
+    private var voiceIntentHost: UIViewController?
+    private var voiceAgentReady: Bool?
+    private var readinessTimer: Timer?
+    private var readinessRequest = UUID()
+    private var readinessPolling = false
+    private var intentWarmupID: UUID?
+    private var intentWarmupDocumentID: UUID?
     private var voiceStarted = Date.distantPast
     private var appeared = false
     private var deleteTimer: Timer?
@@ -74,6 +83,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         appeared = false
+        stopVoiceReadiness()
+        cancelIntentWarmup()
+        removeVoiceIntentControl()
         stopDeleting()
         voiceTimer?.invalidate(); voiceTimer = nil
         if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
@@ -82,9 +94,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         appeared = true
+        voiceAgentReady = nil
         updatePreferredHeight()
         insertVoiceResultIfReady()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
+        updateVoice(); startVoiceReadiness()
     }
 
     override func viewDidLoad() {
@@ -186,7 +200,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         return result
     }
     private func key(_ title: String, symbol: String? = nil, action: @escaping () -> Void) -> UIButton {
-        let button = Lab.button(title, symbol: symbol, action: action)
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = title; configuration.baseBackgroundColor = Lab.surface
+        configuration.baseForegroundColor = .white; configuration.imagePadding = 8
+        if let symbol = symbol { configuration.image = UIImage(systemName: symbol) }
+        let button = KeyboardKeyButton(configuration: configuration, primaryAction: UIAction { _ in action() })
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.configuration?.cornerStyle = .medium
         button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
         button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
@@ -195,8 +214,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         button.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
         button.heightAnchor.constraint(equalToConstant: 44).isActive = true; return button
     }
+    private func keyRow(_ views: [UIView], equal: Bool = true) -> KeyboardKeyRow {
+        let result = KeyboardKeyRow(arrangedSubviews: views); result.spacing = 5
+        if equal { result.distribution = .fillEqually }
+        return result
+    }
     private func render() {
         stopDeleting()
+        removeVoiceIntentControl()
+        if mode != .voice { stopVoiceReadiness(); cancelIntentWarmup(); voiceAgentReady = nil }
         if content.arrangedSubviews.isEmpty { buildChrome() }
         centeringPages = true
         for item in pageStrip.arrangedSubviews { pageStrip.removeArrangedSubview(item); item.removeFromSuperview() }
@@ -211,6 +237,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         modeSelector?.selectedSegmentIndex = mode.rawValue
         view.layoutIfNeeded(); layoutPages(center: true)
         centeringPages = false; updateCandidates(); updateVoice()
+        if appeared && mode == .voice { startVoiceReadiness() }
     }
     private func buildChrome() {
         let brand = Lab.label("◖ CapsWriter", size: 19); brand.font = .boldSystemFont(ofSize: 19)
@@ -341,9 +368,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         mic.widthAnchor.constraint(equalToConstant: 152).isActive = true
         mic.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
         mic.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        voiceButton = mic; updateVoice()
-        content.addArrangedSubview(centeredRow(mic))
-        content.addArrangedSubview(row([
+        let container = UIView()
+        mic.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(mic)
+        NSLayoutConstraint.activate([
+            mic.topAnchor.constraint(equalTo: container.topAnchor), mic.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            mic.leadingAnchor.constraint(equalTo: container.leadingAnchor), mic.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        ])
+        voiceButton = mic; voiceContainer = container; updateVoice()
+        content.addArrangedSubview(centeredRow(container))
+        content.addArrangedSubview(keyRow([
             key("space") { [weak self] in self?.space() },
             key("@") { [weak self] in self?.input("@") }, deleteKey()
         ]))
@@ -370,7 +403,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                           path: path, value: value, jobID: jobID, completion: completion)
     }
     private func tapVoice() {
-        guard hasFullAccess else { voiceMessage = "先在键盘设置允许完全访问，再在主 App 开启语音会话。"; updateVoice(); return }
+        guard hasFullAccess else { voiceMessage = "请在键盘设置允许完全访问，再点击录音。"; updateVoice(); return }
         guard !voiceBusy else { return }
         if voiceState == "recording", let id = voiceID {
             voiceRevision = UUID(); let revision = voiceRevision; voicePolling = false
@@ -384,6 +417,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard !["pending", "stopping", "processing"].contains(voiceState) else { return }
         voiceRevision = UUID(); let revision = voiceRevision
         let documentID = textDocumentProxy.documentIdentifier
+        voiceState = "pending"
         voiceBusy = true; voiceMessage = "正在连接语音会话…"; updateVoice()
         voiceCall("/v1/voice/start", value: [:]) { [weak self] result in
             guard let self = self else { return }
@@ -400,6 +434,116 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 self.voiceStarted = Date(); self.scheduleVoicePoll()
             }
             self.handleVoice(result)
+        }
+    }
+    private var canUseVoiceIntent: Bool {
+        if #available(iOS 18.0, *) {
+            return appeared && mode == .voice && hotEditor == nil && extensionContext != nil && hasFullAccess
+        }
+        return false
+    }
+    private func startVoiceReadiness() {
+        guard canUseVoiceIntent else { return }
+        if readinessTimer == nil {
+            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refreshVoiceReadiness() }
+            readinessTimer = timer; RunLoop.main.add(timer, forMode: .common)
+        }
+        refreshVoiceReadiness()
+    }
+    private func stopVoiceReadiness() {
+        readinessTimer?.invalidate(); readinessTimer = nil
+        readinessRequest = UUID(); readinessPolling = false
+    }
+    private func refreshVoiceReadiness() {
+        guard canUseVoiceIntent, voiceID == nil, !voiceBusy, !readinessPolling else { return }
+        readinessPolling = true; let request = readinessRequest
+        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
+                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+                          path: "/v1/status", timeout: 3) { [weak self] result in
+            guard let self = self, self.readinessRequest == request else { return }
+            self.readinessPolling = false
+            if case .success(let reply) = result { self.voiceAgentReady = reply.agent_ready == true }
+            else { self.voiceAgentReady = nil }
+            self.updateVoice()
+        }
+    }
+    private func updateVoiceIntentControl() {
+        let showIntent = canUseVoiceIntent && voiceID == nil && voiceState == "idle"
+            && (voiceAgentReady != true || intentWarmupID != nil)
+        guard showIntent, let container = voiceContainer else { removeVoiceIntentControl(); return }
+        if #available(iOS 18.0, *) {
+            let control = KeyboardVoiceIntentControl(isEnabled: !voiceBusy) { [weak self] in self?.beginIntentWarmup() }
+            if let host = voiceIntentHost as? UIHostingController<KeyboardVoiceIntentControl> {
+                host.rootView = control
+            } else {
+                let host = UIHostingController(rootView: control)
+                voiceIntentHost = host; addChild(host)
+                host.view.backgroundColor = .clear; host.view.translatesAutoresizingMaskIntoConstraints = false
+                container.addSubview(host.view)
+                NSLayoutConstraint.activate([
+                    host.view.topAnchor.constraint(equalTo: container.topAnchor), host.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                    host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor), host.view.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+                ])
+                host.didMove(toParent: self)
+            }
+            voiceButton?.isHidden = true
+            voiceButton?.accessibilityElementsHidden = true
+            if voiceMessage == "Tap to speak" { voiceHint?.text = "后台启动实验 · 点击麦克风" }
+        }
+    }
+    private func removeVoiceIntentControl() {
+        voiceIntentHost?.willMove(toParent: nil)
+        voiceIntentHost?.view.removeFromSuperview(); voiceIntentHost?.removeFromParent(); voiceIntentHost = nil
+        voiceButton?.isHidden = false; voiceButton?.accessibilityElementsHidden = false
+    }
+    private func cancelIntentWarmup() {
+        if intentWarmupID != nil && voiceID == nil { voiceBusy = false }
+        intentWarmupID = nil; intentWarmupDocumentID = nil
+    }
+    private func beginIntentWarmup() {
+        guard canUseVoiceIntent, !voiceBusy, voiceID == nil, voiceState == "idle" else { return }
+        let request = UUID(); intentWarmupID = request
+        intentWarmupDocumentID = textDocumentProxy.documentIdentifier
+        voiceBusy = true; voiceMessage = "正在尝试后台开启语音…"; updateVoice()
+        pollIntentWarmup(request, deadline: Date().addingTimeInterval(20))
+    }
+    private func failIntentWarmup(_ message: String) {
+        cancelIntentWarmup(); voiceAgentReady = false
+        voiceMessage = message; updateVoice()
+    }
+    private func pollIntentWarmup(_ request: UUID, deadline: Date) {
+        guard intentWarmupID == request else { return }
+        guard appeared, mode == .voice, view.window != nil else { cancelIntentWarmup(); return }
+        guard textDocumentProxy.documentIdentifier == intentWarmupDocumentID else {
+            failIntentWarmup("输入框已改变，点击麦克风重试。"); return
+        }
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return
+        }
+        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
+                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+                          path: "/v1/status", timeout: min(2.5, max(0.25, remaining))) { [weak self] result in
+            guard let self = self, self.intentWarmupID == request else { return }
+            guard self.appeared, self.mode == .voice, self.view.window != nil else { self.cancelIntentWarmup(); return }
+            guard self.textDocumentProxy.documentIdentifier == self.intentWarmupDocumentID else {
+                self.failIntentWarmup("输入框已改变，点击麦克风重试。"); return
+            }
+            guard Date() < deadline else {
+                self.failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return
+            }
+            if case .success(let reply) = result, reply.agent_ready == true {
+                self.cancelIntentWarmup(); self.voiceAgentReady = true; self.updateVoice()
+                self.tapVoice(); return
+            }
+            if case .failure(let error) = result, let bridgeError = error as? BridgeError {
+                switch bridgeError {
+                case .invalidAddress, .invalidToken, .message:
+                    self.failIntentWarmup(bridgeError.localizedDescription); return
+                default: break
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.pollIntentWarmup(request, deadline: deadline) }
         }
     }
     private func scheduleVoicePoll() {
@@ -419,6 +563,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func handleVoice(_ result: Result<BridgeReply, Error>) {
         switch result {
         case .failure(let error):
+            voiceAgentReady = nil
             cancelVoice(); resetVoice(error.localizedDescription)
         case .success(let reply):
             voiceState = reply.state ?? "idle"
@@ -464,12 +609,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         voiceButton?.accessibilityLabel = recording ? "停止录音" : "开始真实语音输入"
         // Polling requests don't disable the stop button, so a tap is never silently lost.
         voiceButton?.isEnabled = !voiceBusy && !["pending", "stopping", "processing"].contains(voiceState)
+        updateVoiceIntentControl()
     }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
         voiceID = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
         voiceRevision = UUID(); voicePolling = false
         voiceMessage = message; updateVoice()
+        refreshVoiceReadiness()
     }
     private func cancelVoice() {
         if let id = voiceID { voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in } }
@@ -516,8 +663,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             if !symbols && index == 1 {
                 let left = UIView(), right = UIView()
                 sizingConstraints.append(left.widthAnchor.constraint(equalTo: right.widthAnchor))
-                content.addArrangedSubview(row([left] + buttons + [right], equal: false))
-            } else { content.addArrangedSubview(row(buttons, equal: symbols || index == 0)) }
+                content.addArrangedSubview(keyRow([left] + buttons + [right], equal: false))
+            } else { content.addArrangedSubview(keyRow(buttons, equal: symbols || index == 0)) }
         }
         // Cross-view constraints require a shared ancestor. All rows must be
         // attached to this page before any inter-key sizing is activated.
@@ -538,7 +685,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         enter.configuration?.title = ""; enter.configuration?.image = UIImage(systemName: "return")
         enter.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
         enter.configuration?.baseForegroundColor = .black
-        content.addArrangedSubview(row([number, space, enter], equal: false))
+        content.addArrangedSubview(keyRow([number, space, enter], equal: false))
     }
     private func returnKey() -> UIButton {
         let button = key("return") { [weak self] in
@@ -916,7 +1063,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         ])
         let currentAddress = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
         let result = Lab.label(currentAddress.isEmpty ? "尚未配对。在主 App 复制配对配置，再回这里粘贴。" : "当前服务：\(currentAddress)\n可在主 App 复制新配置后粘贴。", size: 12, color: Lab.muted)
-        let paste = Lab.button("粘贴配对配置", symbol: "doc.on.clipboard") { [weak result] in
+        let paste = Lab.button("粘贴配对配置", symbol: "doc.on.clipboard") { [weak self, weak result] in
             guard let raw = UIPasteboard.general.string, raw.hasPrefix("cwlab:v1:"),
                   let data = String(raw.dropFirst(9)).data(using: .utf8),
                   let value = try? JSONSerialization.jsonObject(with: data) as? [String: String],
@@ -930,6 +1077,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             UserDefaults.standard.set(endpoint.normalizedAddress, forKey: "bridge.address")
             UserDefaults.standard.set(token, forKey: "bridge.token")
             BridgeLease.apply(address: endpoint.normalizedAddress, expires: value["expires"])
+            self?.cancelIntentWarmup(); self?.stopVoiceReadiness(); self?.voiceAgentReady = nil
+            self?.startVoiceReadiness(); self?.updateVoice()
             result?.text = "已保存：\(endpoint.normalizedAddress)"
         }
         let run = Lab.button("检查版本 / 纠正测试短句") { [weak self, weak result] in

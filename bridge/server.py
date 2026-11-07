@@ -75,7 +75,7 @@ def make_handler(engine, token, voice=None, hotwords=None):
         def do_POST(self):
             if not self.authorized(): return
             voice_paths = ('/v1/voice/agent', '/v1/voice/start', '/v1/voice/ack',
-                           '/v1/voice/stop', '/v1/voice/cancel', '/v1/voice/consume', '/v1/voice/audio')
+                           '/v1/voice/stop', '/v1/voice/cancel', '/v1/voice/consume', '/v1/voice/audio', '/v1/voice/text')
             is_voice = self.path in voice_paths and voice is not None
             is_hotwords = self.path == '/v1/hotwords/save' and hotwords is not None
             if self.path != '/v1/correct' and not is_voice and not is_hotwords:
@@ -85,6 +85,7 @@ def make_handler(engine, token, voice=None, hotwords=None):
             try: length = int(self.headers.get('Content-Length', '-1'))
             except ValueError: length = -1
             limit = (MAX_AUDIO * 4 // 3 + MAX_BODY) if self.path == '/v1/voice/audio' else (MAX_HOT_BYTES * 6 + MAX_BODY if is_hotwords else MAX_BODY)
+            if self.path == '/v1/voice/text': limit = MAX_BODY + 20000 * 6
             if not 0 < length <= limit:
                 self.reply(413, {'error': 'Body length limit exceeded'}); return
             self.connection.settimeout(10)
@@ -119,6 +120,7 @@ def make_handler(engine, token, voice=None, hotwords=None):
                     result = voice.agent(value.get('agent_id'), value.get('active', True))
                 elif action == 'ack': result = voice.ack(value.get('id'), value.get('agent_id'))
                 elif action == 'audio': result = voice.upload(value)
+                elif action == 'text': result = voice.upload_text(value)
                 elif action == 'stop': result = voice.stop(value.get('id'))
                 elif action == 'cancel': result = voice.cancel(value.get('id'))
                 else: result = voice.consume(value.get('id'))

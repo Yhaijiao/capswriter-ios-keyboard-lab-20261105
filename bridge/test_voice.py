@@ -54,6 +54,43 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(self.relay.result(job_id)['state'], 'error')
         with self.assertRaises(VoiceError): self.relay.upload(self.payload(job_id))
 
+    def test_phone_transcript_uses_same_correction_without_server_asr(self):
+        job_id = self.begin(); self.relay.stop(job_id)
+        value = dict(id=job_id, agent_id=self.agent, text='卡普斯赖特')
+        self.assertEqual(self.relay.upload_text(value)['text'], 'CapsWriter')
+        self.assertFalse(hasattr(self.asr, 'pcm'))
+        with self.assertRaises(VoiceError): self.relay.upload_text(value)
+        self.assertEqual(self.relay.consume(job_id)['text'], '')
+
+    def test_phone_transcript_validates_agent_bounds_and_cancel(self):
+        job_id = self.begin()
+        for text in ('', ' ', None, '字' * 20001):
+            with self.assertRaises(VoiceError):
+                self.relay.upload_text(dict(id=job_id, agent_id=self.agent, text=text))
+        with self.assertRaises(VoiceError):
+            self.relay.upload_text(dict(id=job_id, agent_id='wrong', text='测试'))
+        self.relay.cancel(job_id)
+        with self.assertRaises(VoiceError):
+            self.relay.upload_text(dict(id=job_id, agent_id=self.agent, text='测试'))
+
+    def test_cancel_during_phone_correction_cannot_resurrect_text(self):
+        entered, release = threading.Event(), threading.Event()
+        class SlowEngine(DemoEngine):
+            def correct(self, text):
+                entered.set(); release.wait(2)
+                return super().correct(text)
+        self.relay.engine = SlowEngine()
+        job_id = self.begin()
+        worker = threading.Thread(target=lambda: self.relay.upload_text(dict(id=job_id, agent_id=self.agent, text='测试')))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(2)); self.relay.cancel(job_id)
+        finally:
+            release.set(); worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(self.relay.result(job_id)['state'], 'cancelled')
+        self.assertEqual(self.relay.result(job_id)['text'], '')
+
     def test_isolation_and_no_parallel_capture(self):
         job_id = self.begin()
         with self.assertRaises(VoiceError): self.relay.start()
@@ -135,6 +172,15 @@ class VoiceHTTPTests(unittest.TestCase):
                 sample_rate=16000, encoding='f32le', audio=base64.b64encode(struct.pack('<f', 0) * 4000).decode()))
             self.assertEqual(result[1]['text'], 'CapsWriter')
             self.assertEqual(request('/v1/voice/result?id=' + job_id)[1]['state'], 'done')
+            self.assertTrue(request('/v1/status')[1]['phone_asr_v1'])
+            request('/v1/voice/consume', {'id': job_id})
+            code, phone_job = request('/v1/voice/start', {}); self.assertEqual(code, 200)
+            phone_id = phone_job['id']
+            request('/v1/voice/ack', {'id': phone_id, 'agent_id': 'http-test-phone-id'})
+            phone_value = dict(id=phone_id, agent_id='http-test-phone-id', text='卡普斯赖特')
+            self.assertEqual(request('/v1/voice/text', phone_value, 'wrong')[0], 401)
+            self.assertEqual(request('/v1/voice/text', phone_value)[1]['text'], 'CapsWriter')
+            self.assertEqual(request('/v1/voice/text', phone_value)[0], 409)
         finally:
             server.shutdown(); server.server_close(); thread.join()
 

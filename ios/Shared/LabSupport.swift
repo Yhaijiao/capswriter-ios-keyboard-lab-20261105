@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.4.7"
+    static let version = "0.4.8"
     static let maxRecordingSeconds = 300
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
@@ -55,6 +55,7 @@ struct BridgeReply: Decodable {
     var voice_enabled: Bool?
     var agent_ready: Bool?
     var asr_ready: Bool?
+    var phone_asr_v1: Bool?
     var max_seconds: Int?
 }
 

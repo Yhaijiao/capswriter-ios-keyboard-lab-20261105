@@ -20,6 +20,15 @@ def verify(path, expected_version=None):
         assert spec['NSExtensionAttributes']['IsASCIICapable'] is True
         assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
+        if expected_version == '0.4.8':
+            activity_base = base + 'PlugIns/CapsWriterVoiceActivity.appex/'
+            activity = plistlib.loads(package.read(activity_base + 'Info.plist'))
+            assert activity['CFBundleIdentifier'] == app['CFBundleIdentifier'] + '.activity'
+            assert activity['CFBundleVersion'] == app['CFBundleVersion']
+            assert activity['CFBundleShortVersionString'] == app['CFBundleShortVersionString']
+            assert activity['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
+            assert app.get('NSSupportsLiveActivities') is True
+            assert package.read(activity_base + activity['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         if any(name.endswith('pinyin-lexicon.json') for name in package.namelist()):
             assert app.get('CFBundleShortVersionString') == extension.get('CFBundleShortVersionString'), 'Mismatched versions'
             if expected_version is not None:

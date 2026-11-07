@@ -102,7 +102,8 @@ class VoiceRelay:
         with self.lock:
             self._expire()
             return dict(voice_enabled=True, agent_ready=self.clock() - self.heartbeat <= 8,
-                        asr_ready=self.recognizer.available(), max_seconds=MAX_SECONDS)
+                        asr_ready=self.recognizer.available(), max_seconds=MAX_SECONDS,
+                        phone_asr_v1=True)
 
     def agent(self, agent_id, active=True):
         if not isinstance(agent_id, str) or not 16 <= len(agent_id) <= 80:
@@ -197,6 +198,7 @@ class VoiceRelay:
                 if self.job['state'] == 'processing':
                     self.job.update(corrected, state='done', error='')
                 return self._public()
+
         except VoiceError:
             raise
         except Exception:
@@ -204,4 +206,31 @@ class VoiceRelay:
                 self._job(job_id)
                 if self.job['state'] == 'processing':
                     self.job.update(state='error', error='电脑识别失败，请检查 CapsWriter 服务后重试。', text='')
+                return self._public()
+
+    def upload_text(self, value):
+        """A paired microphone agent submits its on-device final transcript."""
+        job_id = value.get('id')
+        with self.lock:
+            self._agent(value.get('agent_id')); self._job(job_id)
+            if self.job['state'] not in ('recording', 'stopping'):
+                raise VoiceError(409, '录音已结束或取消。')
+            text = value.get('text')
+            if not isinstance(text, str) or not text.strip() or len(text) > 20000:
+                raise VoiceError(400, '本地识别没有有效文字，或文字过长，请重新录音。')
+            self.job['state'] = 'processing'
+        try:
+            corrected = asdict(self.engine.correct(text))
+            with self.lock:
+                self._job(job_id)
+                if self.job['state'] == 'processing':
+                    self.job.update(corrected, state='done', error='')
+                return self._public()
+        except VoiceError:
+            raise
+        except Exception:
+            with self.lock:
+                self._job(job_id)
+                if self.job['state'] == 'processing':
+                    self.job.update(state='error', text='', error='热词纠错失败，请检查识别服务。')
                 return self._public()

@@ -26,8 +26,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
-    private let voice = VoiceSession()
+    private let voice = VoiceIntentCoordinator.shared.session
     private let automaticSession = UISwitch()
+    private let recognitionMode = UISegmentedControl(items: ["AWS 云端", "手机中文", "手机英文"])
     private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()
     private let voiceStatus = Lab.label("语音会话未开启 · 麦克风关闭", size: 14, color: Lab.muted)
@@ -108,6 +109,13 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         let autoRow = UIStackView(arrangedSubviews: [Lab.label("打开 Lab 自动开启 10 分钟", size: 16), automaticSession])
         autoRow.axis = .horizontal; autoRow.spacing = 12; autoRow.alignment = .center
         stack.addArrangedSubview(autoRow)
+        stack.addArrangedSubview(Lab.label("识别方式 · 手机为可撤回实验", size: 16))
+        let savedMode = UserDefaults.standard.string(forKey: "voice.recognitionMode") ?? "cloud"
+        recognitionMode.selectedSegmentIndex = ["cloud", "phone-zh", "phone-en"].firstIndex(of: savedMode) ?? 0
+        recognitionMode.accessibilityIdentifier = "voice-recognition-mode"
+        recognitionMode.addTarget(self, action: #selector(recognitionModeChanged), for: .valueChanged)
+        stack.addArrangedSubview(recognitionMode)
+        stack.addArrangedSubview(Lab.label("手机模式由 Apple 本地识别，首次需准备语言模型；识别后的文字仍应用同一套共享热词。准确度不满意，点 AWS 云端即可切回。", size: 13, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("也可手动选择时长并重新开启：", size: 14, color: Lab.muted))
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
         duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 0
@@ -150,6 +158,15 @@ final class LabViewController: UIViewController, UITextViewDelegate {
 
     @objc private func appBecameActive() { beginAutomaticSessionIfNeeded() }
     @objc private func appEnteredBackground() { autoStartPolicy.enteredBackground() }
+    @objc private func recognitionModeChanged() {
+        let value = ["cloud", "phone-zh", "phone-en"][max(0, min(2, recognitionMode.selectedSegmentIndex))]
+        UserDefaults.standard.set(value, forKey: "voice.recognitionMode")
+        voice.stop(message: "识别方式已切换，正在准备新的语音会话…")
+        autoStartPolicy.configurationChanged()
+        guard savePairing() else { return }
+        voice.start(address: address.text ?? "", token: token.text ?? "",
+                    sessionMinutes: [10, 30, 60][max(0, min(2, duration.selectedSegmentIndex))])
+    }
     @objc private func automaticSessionChanged() {
         UserDefaults.standard.set(automaticSession.isOn, forKey: "voice.autoStart")
         if automaticSession.isOn {
