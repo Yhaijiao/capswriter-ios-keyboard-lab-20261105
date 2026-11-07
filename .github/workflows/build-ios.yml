@@ -1,4 +1,4 @@
-name: Build unsigned iPhone keyboard
+name: Build iPhone keyboard for sideloading
 on:
   workflow_dispatch:
   push:
@@ -47,18 +47,30 @@ jobs:
           xcodebuild -project CapsWriterKeyboard.xcodeproj -scheme CapsWriterLab \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO build | tee build-device.log
-      - name: Package unsigned IPA
+      - name: Package IPA with shared-keychain signing template
         run: |
+          set -o pipefail
+          APP=artifacts/Payload/CapsWriterLab.app
+          KEYBOARD="$APP/PlugIns/CapsWriterKeyboard.appex"
+          ACTIVITY="$APP/PlugIns/CapsWriterVoiceActivity.appex"
           mkdir -p artifacts/Payload
-          ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app artifacts/Payload/CapsWriterLab.app
-          test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterKeyboard.appex
-          test -d artifacts/Payload/CapsWriterLab.app/PlugIns/CapsWriterVoiceActivity.appex
+          ditto build/device/Build/Products/Release-iphoneos/CapsWriterLab.app "$APP"
+          test -d "$KEYBOARD"
+          test -d "$ACTIVITY"
+          codesign --force --sign - "$ACTIVITY"
+          sed 's/$(AppIdentifierPrefix)/CAPSWTEST0./g' ios/App/CapsWriterLab.entitlements > build/sideload.entitlements
+          for BUNDLE in "$KEYBOARD" "$APP"; do
+            codesign --force --sign - --generate-entitlement-der --entitlements build/sideload.entitlements "$BUNDLE"
+            codesign --display --entitlements - "$BUNDLE" > build/sideload-observed.plist
+            test "$(/usr/libexec/PlistBuddy -c 'Print :keychain-access-groups:0' build/sideload-observed.plist)" = CAPSWTEST0.org.capswriterlab.voice-pairings
+          done
+          codesign --verify --deep --strict "$APP"
           cd artifacts
-          zip -qr CapsWriterLab-0.4.10-unsigned.ipa Payload
-          shasum -a 256 CapsWriterLab-0.4.10-unsigned.ipa > SHA256SUMS.txt
+          zip -qr CapsWriterLab-0.4.10-sideload.ipa Payload
+          shasum -a 256 CapsWriterLab-0.4.10-sideload.ipa > SHA256SUMS.txt
           rm -r Payload
       - name: Verify package
-        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.10-unsigned.ipa 0.4.10
+        run: python3 scripts/verify_ipa.py artifacts/CapsWriterLab-0.4.10-sideload.ipa 0.4.10
       - name: Upload install package before simulator tests
         uses: actions/upload-artifact@v4
         with:

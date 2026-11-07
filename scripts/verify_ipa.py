@@ -1,4 +1,4 @@
-"""Inspect an unsigned IPA before handing it to a local signing tool."""
+"""Inspect an IPA before handing it to a local signing tool."""
 import json
 import plistlib
 import sys
@@ -18,8 +18,10 @@ def verify(path, expected_version=None):
         assert spec['NSExtensionPointIdentifier'] == 'com.apple.keyboard-service'
         assert spec['NSExtensionPrincipalClass'].endswith('.KeyboardViewController')
         assert spec['NSExtensionAttributes']['IsASCIICapable'] is True
-        assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
-        assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
+        binaries = (package.read(base + app['CFBundleExecutable']), package.read(extbase + extension['CFBundleExecutable']))
+        assert all(binary[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe') for binary in binaries)
+        if str(path).endswith('-sideload.ipa'):
+            assert all(b'CAPSWTEST0.org.capswriterlab.voice-pairings' in binary for binary in binaries), 'Missing keychain signing template'
         if tuple(map(int, app['CFBundleShortVersionString'].split('.'))) >= (0, 4, 8):
             activity_base = base + 'PlugIns/CapsWriterVoiceActivity.appex/'
             activity = plistlib.loads(package.read(activity_base + 'Info.plist'))
@@ -53,7 +55,7 @@ def verify(path, expected_version=None):
     return {'package': str(path), 'app': app['CFBundleIdentifier'],
             'version': app.get('CFBundleShortVersionString'),
             'keyboard': extension['CFBundleIdentifier'], 'validation': 'passed',
-            'signing': 'unsigned; requires local personal signing',
+            'signing': 'requires local personal signing',
             'physical_device_test': 'not yet performed'}
 
 
