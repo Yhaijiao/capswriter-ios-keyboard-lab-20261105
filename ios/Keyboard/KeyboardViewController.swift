@@ -832,13 +832,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         rebuildCandidateGrid()
     }
     private func candidateButton(grid: Bool, action: @escaping () -> Void) -> UIButton {
-        let button = UIButton(type: .system)
+        let button = PinyinCandidateButton(frame: .zero)
         button.addAction(UIAction { _ in action() }, for: .primaryActionTriggered)
         button.setTitleColor(.white, for: .normal)
         button.titleLabel?.font = .systemFont(ofSize: grid ? 20 : 18)
         button.titleLabel?.numberOfLines = 1
         button.titleLabel?.lineBreakMode = .byTruncatingTail
         button.titleLabel?.adjustsFontSizeToFitWidth = false
+        button.titleLabel?.textAlignment = .center
         button.clipsToBounds = true
         button.contentEdgeInsets = UIEdgeInsets(top: 0, left: grid ? 3 : 9, bottom: 0, right: grid ? 3 : 9)
         button.layer.cornerRadius = grid ? 0 : 16

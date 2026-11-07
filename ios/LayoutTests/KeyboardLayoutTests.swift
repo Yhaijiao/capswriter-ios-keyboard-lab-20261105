@@ -162,6 +162,11 @@ final class KeyboardLayoutTests: XCTestCase {
         for letter in "nihao" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
         await waitForCandidate("candidate-你好", in: root)
         XCTAssertEqual(label.text, "nihao", "A stale decoding result cannot replace new input")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        let hello = visibleButton("candidate-你好", in: root)
+        XCTAssertEqual(hello.titleLabel?.text, "你好")
+        XCTAssertGreaterThan(hello.titleLabel?.bounds.width ?? 0, 30)
         let image = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
         }
@@ -200,12 +205,18 @@ final class KeyboardLayoutTests: XCTestCase {
             XCTAssertLessThanOrEqual(button.bounds.width, scroll.bounds.width + 1)
             XCTAssertEqual(button.titleLabel?.numberOfLines, 1)
             XCTAssertEqual(button.titleLabel?.lineBreakMode, .byTruncatingTail)
+            XCTAssertEqual(button.titleLabel?.text, button.title(for: .normal))
+            XCTAssertGreaterThan(button.titleLabel?.bounds.width ?? 0, 10)
+            XCTAssertGreaterThanOrEqual(button.titleLabel?.frame.minX ?? -1, 0)
+            XCTAssertLessThanOrEqual(button.titleLabel?.frame.maxX ?? .infinity, button.bounds.width + 0.5)
         }
         for (previous, next) in zip(buttons, buttons.dropFirst()) {
             XCTAssertLessThanOrEqual(previous.frame.maxX, next.frame.minX + 0.5, "Candidate controls must not overlap")
         }
         visibleButton("pinyin-expand-candidates", in: root).sendActions(for: .primaryActionTriggered)
         XCTAssertEqual(stripButtons().count, 1, "The expanded header must show just the primary suggestion")
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        try? await Task.sleep(nanoseconds: 100_000_000)
         host.view.layoutIfNeeded(); root.layoutIfNeeded()
         let focusedImage = UIGraphicsImageRenderer(size: root.bounds.size).image { _ in
             root.drawHierarchy(in: root.bounds, afterScreenUpdates: true)
