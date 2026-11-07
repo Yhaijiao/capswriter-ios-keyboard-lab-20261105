@@ -26,7 +26,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
+    private let updateStatus = Lab.label("", size: 14, color: Lab.muted)
     private let bridgeTarget = UISegmentedControl(items: BridgeTarget.allCases.map(\.title))
+    private let bridgeSwitchStatus = Lab.label("", size: 14, color: Lab.muted)
     private var profiles: BridgeProfiles?
     private var connectionRequest = UUID()
     private let voice = VoiceIntentCoordinator.shared.session
@@ -87,6 +89,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         bridgeTarget.accessibilityIdentifier = "bridge-target"
         bridgeTarget.addTarget(self, action: #selector(bridgeTargetChanged), for: .valueChanged)
         stack.addArrangedSubview(bridgeTarget)
+        bridgeSwitchStatus.isHidden = true
+        stack.addArrangedSubview(bridgeSwitchStatus)
         configure(address, placeholder: "http://局域网IP 或 https://服务器IP")
         address.keyboardType = .URL
         configure(token, placeholder: "识别服务配对码")
@@ -148,8 +152,10 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         })
         voice.onStatus = { [weak self] text in self?.voiceStatus.text = text }
         stack.addArrangedSubview(voiceStatus)
-        stack.addArrangedSubview(Lab.label("5  免费安装与续签", size: 21))
-        stack.addArrangedSubview(Lab.label("使用同一个 Apple 账号和相同 Bundle ID 续签。Sideloadly 中开启自动刷新，电脑保持运行并能找到手机。免费签名每 7 天到期；实际自动刷新需要跨日观察。\n如果过期，重新签名安装；先备份重要测试内容。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("5  更新与续签", size: 21))
+        stack.addArrangedSubview(Lab.label("首次用电脑设置 SideStore 后，连 Wi-Fi 和 LocalDevVPN，点下方按钮可安装最新实验版。免费签名仍需每 7 天续签。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.button("用 SideStore 安装更新", symbol: "arrow.down.app") { [weak self] in self?.openSideStoreUpdate() })
+        stack.addArrangedSubview(updateStatus)
         stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网使用 HTTPS；局域网 HTTP 仅用于可信网络。配对保存在本机，热词仅在你点击保存时写回。", size: 13, color: Lab.muted))
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
             name: UIResponder.keyboardDidShowNotification, object: nil)
@@ -304,7 +310,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         } catch {
             bridgeTarget.isEnabled = false
             showPairing(BridgePairingStore.activePairing())
-            status.text = error.localizedDescription
+            bridgeSwitchStatus.text = "一键切换不可用。\(error.localizedDescription)"
+            bridgeSwitchStatus.isHidden = false
         }
     }
 
@@ -338,5 +345,18 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private func showPairing(_ pairing: BridgePairing?) {
         address.text = pairing?.address
         token.text = pairing?.token
+    }
+
+    private func openSideStoreUpdate() {
+        view.endEditing(true)
+        guard let url = SideStoreUpdateLink.make() else {
+            updateStatus.text = "无法生成更新链接。"
+            return
+        }
+        UIApplication.shared.open(url) { [weak self] opened in
+            self?.updateStatus.text = opened
+                ? "已打开 SideStore，请在那里确认安装。"
+                : "无法打开 SideStore，请先完成 SideStore 的首次设置。"
+        }
     }
 }

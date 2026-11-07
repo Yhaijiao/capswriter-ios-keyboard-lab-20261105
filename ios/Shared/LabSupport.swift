@@ -1,7 +1,7 @@
 import UIKit
 
 enum Lab {
-    static let version = "0.4.9"
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
     static let maxRecordingSeconds = 300
     static let chineseSample = "这是 CapsWriter 手机键盘测试。"
     static let englishSample = "CapsWriter keyboard test. "
