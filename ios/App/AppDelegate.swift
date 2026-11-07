@@ -26,9 +26,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
+    private let bridgeTarget = UISegmentedControl(items: BridgeTarget.allCases.map(\.title))
+    private var profiles: BridgeProfiles?
+    private var connectionRequest = UUID()
     private let voice = VoiceIntentCoordinator.shared.session
     private let automaticSession = UISwitch()
-    private let recognitionMode = UISegmentedControl(items: ["AWS 云端", "手机中文", "手机英文"])
+    private let recognitionMode = UISegmentedControl(items: ["识别服务", "手机中文", "手机英文"])
     private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()
     private let voiceStatus = Lab.label("语音会话未开启 · 麦克风关闭", size: 14, color: Lab.muted)
@@ -80,25 +83,32 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(editor)
         stack.addArrangedSubview(Lab.button("清空测试区", symbol: "trash") { [weak self] in self?.editor.text = "" })
         stack.addArrangedSubview(Lab.label("3  连接识别服务", size: 21))
-        stack.addArrangedSubview(Lab.label("可连接家中电脑或自己的云端识别服务。局域网地址例如 http://192.168.1.20:8765；公网地址必须使用 HTTPS。填入服务地址和配对码后，手机复用该服务的模型、热词和纠正规则。", size: 15, color: Lab.muted))
-        configure(address, placeholder: "http://局域网IP 或 https://服务器IP", key: "bridge.address")
+        stack.addArrangedSubview(Lab.label("家里电脑和 AWS 各保存一份配对，键盘跟随 Lab 的选择。请在 AWS 控制台启停实例。局域网可用 HTTP，公网必须用 HTTPS。", size: 15, color: Lab.muted))
+        bridgeTarget.accessibilityIdentifier = "bridge-target"
+        bridgeTarget.addTarget(self, action: #selector(bridgeTargetChanged), for: .valueChanged)
+        stack.addArrangedSubview(bridgeTarget)
+        configure(address, placeholder: "http://局域网IP 或 https://服务器IP")
         address.keyboardType = .URL
-        configure(token, placeholder: "识别服务配对码", key: "bridge.token")
+        configure(token, placeholder: "识别服务配对码")
         token.isSecureTextEntry = true
         stack.addArrangedSubview(address); stack.addArrangedSubview(token)
-        stack.addArrangedSubview(Lab.button("检查服务词库版本", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
-        stack.addArrangedSubview(Lab.button("复制配对配置，交给键盘", symbol: "doc.on.doc") { [weak self] in
+        stack.addArrangedSubview(Lab.button("保存配对并检查连接", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
+        let legacyCopy = Lab.button("复制旧版键盘配对配置", symbol: "doc.on.doc") { [weak self] in
             guard let self = self else { return }
-            guard self.savePairing() else { return }
-            var value = ["address": self.address.text ?? "", "token": self.token.text ?? ""]
-            if let expiry = BridgeLease.expiry(address: self.address.text ?? "") { value["expires"] = String(expiry) }
+            guard let pairing = self.savePairing() else { return }
+            guard !pairing.isExpired() else { self.status.text = "试验服务器配置已到期，请更新配对配置。"; return }
+            var value = ["address": pairing.address, "token": pairing.token]
+            if let expiry = pairing.expires { value["expires"] = String(expiry) }
             guard let data = try? JSONSerialization.data(withJSONObject: value),
                   let text = String(data: data, encoding: .utf8) else { return }
             UIPasteboard.general.setItems([["public.utf8-plain-text": "cwlab:v1:" + text]],
                                           options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(300)])
             self.status.text = "配对配置已复制，5 分钟后过期。键盘 → 热词 → 齿轮 → 粘贴配对配置。"
             self.beginAutomaticSessionIfNeeded()
-        })
+        }
+        stack.addArrangedSubview(legacyCopy)
+        loadBridgeProfiles()
+        legacyCopy.isHidden = profiles != nil || BridgePairingStore.hasUsedSharedProfiles
         stack.addArrangedSubview(Lab.button("用服务规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
@@ -115,7 +125,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         recognitionMode.accessibilityIdentifier = "voice-recognition-mode"
         recognitionMode.addTarget(self, action: #selector(recognitionModeChanged), for: .valueChanged)
         stack.addArrangedSubview(recognitionMode)
-        stack.addArrangedSubview(Lab.label("手机模式由 Apple 本地识别，首次需准备语言模型；识别后的文字仍应用同一套共享热词。准确度不满意，点 AWS 云端即可切回。", size: 13, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("手机模式由 Apple 本地识别，首次需准备语言模型；文字仍交给所选服务应用热词。点“识别服务”可切回服务端识别。", size: 13, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("也可手动选择时长并重新开启：", size: 14, color: Lab.muted))
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
         duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 0
@@ -124,12 +134,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.button("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
             guard let self = self else { return }
             self.view.endEditing(true)
-            guard self.savePairing() else { return }
+            guard let pairing = self.savePairing() else { return }
             self.autoStartPolicy.userStoppedOrStarted()
             let minutes = [10, 30, 60][max(0, min(2, self.duration.selectedSegmentIndex))]
             UserDefaults.standard.set(minutes, forKey: "voice.sessionMinutes")
             if self.voice.active || self.voice.starting { self.voice.stop(message: "正在重新开启语音会话…") }
-            self.voice.start(address: self.address.text ?? "", token: self.token.text ?? "", sessionMinutes: minutes)
+            self.voice.start(pairing: pairing, sessionMinutes: minutes)
         })
         stack.addArrangedSubview(Lab.button("关闭本次语音会话", symbol: "stop.circle") { [weak self] in
             guard let self = self else { return }
@@ -140,7 +150,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(voiceStatus)
         stack.addArrangedSubview(Lab.label("5  免费安装与续签", size: 21))
         stack.addArrangedSubview(Lab.label("使用同一个 Apple 账号和相同 Bundle ID 续签。Sideloadly 中开启自动刷新，电脑保持运行并能找到手机。免费签名每 7 天到期；实际自动刷新需要跨日观察。\n如果过期，重新签名安装；先备份重要测试内容。", size: 15, color: Lab.muted))
-        stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网连接使用 HTTPS；局域网 HTTP 仅在可信的私人网络使用。热词仅在你点击保存时写回。主 App 与键盘设置独立，不依赖 App Groups。", size: 13, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网使用 HTTPS；局域网 HTTP 仅用于可信网络。配对保存在本机，热词仅在你点击保存时写回。", size: 13, color: Lab.muted))
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
             name: UIResponder.keyboardDidShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
@@ -163,8 +173,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         UserDefaults.standard.set(value, forKey: "voice.recognitionMode")
         voice.stop(message: "识别方式已切换，正在准备新的语音会话…")
         autoStartPolicy.configurationChanged()
-        guard savePairing() else { return }
-        voice.start(address: address.text ?? "", token: token.text ?? "",
+        guard let pairing = savePairing() else { return }
+        voice.start(pairing: pairing,
                     sessionMinutes: [10, 30, 60][max(0, min(2, duration.selectedSegmentIndex))])
     }
     @objc private func automaticSessionChanged() {
@@ -177,13 +187,12 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         }
     }
     private func beginAutomaticSessionIfNeeded() {
-        let a = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
-        let t = UserDefaults.standard.string(forKey: "bridge.token") ?? ""
+        guard let pairing = BridgePairingStore.activePairing(), !pairing.isExpired() else { return }
         let visible = isViewLoaded && view.window != nil && UIApplication.shared.applicationState == .active
         guard autoStartPolicy.shouldStart(enabled: automaticSession.isOn,
-            configured: BridgeEndpoint(address: a) != nil && BridgeClient.isValidToken(t), foreground: visible,
+            configured: true, foreground: visible,
             busy: voice.active || voice.starting) else { return }
-        voice.start(address: a, token: t, sessionMinutes: 10)
+        voice.start(pairing: pairing, sessionMinutes: 10)
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) { revealEditor() }
@@ -194,8 +203,8 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         scroll.scrollRectToVisible(editor.convert(editor.bounds, to: scroll).insetBy(dx: 0, dy: -12), animated: false)
     }
 
-    private func configure(_ field: UITextField, placeholder: String, key: String) {
-        field.placeholder = placeholder; field.text = UserDefaults.standard.string(forKey: key)
+    private func configure(_ field: UITextField, placeholder: String) {
+        field.placeholder = placeholder
         field.borderStyle = .roundedRect; field.autocorrectionType = .no
         field.autocapitalizationType = .none; field.font = .systemFont(ofSize: 16)
         field.heightAnchor.constraint(equalToConstant: 46).isActive = true
@@ -208,51 +217,126 @@ final class LabViewController: UIViewController, UITextViewDelegate {
               t.count >= 24, t.count <= 128, BridgeClient.isValidToken(t),
               let endpoint = BridgeEndpoint(address: a) else { return }
         let expiry = values.first(where: { $0.name == "expires" })?.value
-        if let expiry = expiry, Double(expiry).map({ !$0.isFinite || $0 <= 0 }) ?? true { return }
-        let alert = UIAlertController(title: "连接识别服务", message: "服务器：\(endpoint.normalizedAddress)\n语音片段、测试文字和热词管理请求将发送到这个服务。请确认这是你自己的服务器。", preferredStyle: .alert)
+        if let expiry, Double(expiry) == nil { return }
+        guard let pairing = BridgePairing(address: endpoint.normalizedAddress, token: t, expires: expiry.flatMap { Double($0) }) else { return }
+        let target = profiles?.selected
+        let alert = UIAlertController(title: "配对\(target?.title ?? "识别服务")", message: "服务器：\(pairing.address)\n请确认这是你自己的服务器。", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "使用此服务", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.voice.stop(); self.address.text = endpoint.normalizedAddress; self.token.text = t
-            BridgeLease.apply(address: endpoint.normalizedAddress, expires: expiry)
-            self.connect(correct: false)
+            guard let self, self.profiles?.selected == target else { return }
+            guard !pairing.isExpired() else { self.status.text = "试验服务器配置已到期，请更新配对配置。"; return }
+            if self.persist(pairing) { self.checkConnection(pairing, correct: false) }
         })
         present(alert, animated: true)
     }
     private func connect(correct: Bool) {
-        guard savePairing() else { return }
-        let a = address.text ?? "", t = token.text ?? ""
+        guard let pairing = savePairing() else { return }
+        checkConnection(pairing, correct: correct)
+    }
+
+    private func checkConnection(_ pairing: BridgePairing, correct: Bool) {
+        let request = UUID(); connectionRequest = request
+        let title = profiles?.selected.title ?? "识别服务"
         status.text = "正在连接…"
-        BridgeClient.request(address: a, token: t, text: correct ? editor.text : nil) { [weak self] result in
-            guard let self = self else { return }
+        BridgeClient.request(pairing: pairing, text: correct ? editor.text : nil) { [weak self] result in
+            guard let self, self.connectionRequest == request else { return }
             switch result {
             case .success(let reply):
-                self.status.text = "模式：\(reply.mode ?? "未知")\n词库：\(reply.version ?? "未知")\n算法：\(reply.source_version ?? "未知")\n词条：\(reply.terms ?? 0)\n语音桥接：\(reply.voice_enabled == true ? "已启用" : "未启用") · 识别服务：\(reply.asr_ready == true ? "可连接" : "未连接")"
+                let ready = reply.voice_enabled == true && reply.asr_ready == true
+                self.status.text = "\(title) · \(ready ? "已就绪" : "语音服务未就绪")\n词库：\(reply.version ?? "未知") · 词条：\(reply.terms ?? 0)"
                 if correct, let text = reply.text { self.editor.text = text }
                 if !correct { self.beginAutomaticSessionIfNeeded() }
-            case .failure(let error): self.status.text = error.localizedDescription
+            case .failure(let error): self.status.text = "\(title) · \(error.localizedDescription)"
             }
         }
     }
-    @discardableResult private func savePairing() -> Bool {
+    private func savePairing() -> BridgePairing? {
         let rawAddress = (address.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let t = (token.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let endpoint = BridgeEndpoint(address: rawAddress) else {
-            status.text = BridgeError.invalidAddress.localizedDescription; return false
+            status.text = BridgeError.invalidAddress.localizedDescription; return nil
         }
-        guard BridgeClient.isValidToken(t) else {
-            status.text = BridgeError.invalidToken.localizedDescription; return false
+        let current = BridgePairingStore.activePairing()
+        let expiry = current?.address == endpoint.normalizedAddress ? current?.expires : nil
+        guard let pairing = BridgePairing(address: endpoint.normalizedAddress, token: t, expires: expiry) else {
+            status.text = BridgeError.invalidToken.localizedDescription; return nil
         }
-        let a = endpoint.normalizedAddress
-        let changed = a != (UserDefaults.standard.string(forKey: "bridge.address") ?? "")
-            || t != (UserDefaults.standard.string(forKey: "bridge.token") ?? "")
-        if changed {
+        return persist(pairing) ? pairing : nil
+    }
+
+    private func persist(_ pairing: BridgePairing) -> Bool {
+        let previous = BridgePairingStore.activePairing()
+        do {
+            if var next = profiles {
+                next[next.selected] = pairing
+                try BridgePairingStore.save(next)
+                profiles = next
+            } else {
+                guard !BridgePairingStore.hasUsedSharedProfiles else { throw BridgePairingStore.StoreError.unavailable }
+                pairing.saveLegacy()
+            }
+        } catch { status.text = error.localizedDescription; return false }
+        if previous != pairing {
             voice.stop(message: "连接配置已更新，正在准备新的语音会话。")
             autoStartPolicy.configurationChanged()
+            connectionRequest = UUID()
         }
-        address.text = a; token.text = t
-        UserDefaults.standard.set(a, forKey: "bridge.address")
-        UserDefaults.standard.set(t, forKey: "bridge.token")
+        showPairing(pairing)
         return true
+    }
+
+    private func loadBridgeProfiles() {
+        do {
+            if let saved = try BridgePairingStore.load() {
+                profiles = saved
+            } else {
+                let initial = BridgeProfiles(legacy: BridgePairing.legacy())
+                try BridgePairingStore.save(initial)
+                profiles = initial
+            }
+            bridgeTarget.selectedSegmentIndex = BridgeTarget.allCases.firstIndex(of: profiles?.selected ?? .aws) ?? 0
+            showPairing(profiles?.active)
+            if profiles?.active?.isExpired() == true {
+                status.text = "试验服务器配置已到期，请更新配对配置。"
+            } else if let pairing = profiles?.active, let target = profiles?.selected {
+                status.text = "\(target.title) · 已配对 \(pairing.address)"
+            }
+        } catch {
+            bridgeTarget.isEnabled = false
+            showPairing(BridgePairingStore.activePairing())
+            status.text = error.localizedDescription
+        }
+    }
+
+    @objc private func bridgeTargetChanged() {
+        let index = bridgeTarget.selectedSegmentIndex
+        guard var next = profiles, BridgeTarget.allCases.indices.contains(index) else { return }
+        view.endEditing(true)
+        let previous = next.selected
+        next.selected = BridgeTarget.allCases[index]
+        guard BridgePairingStore.keyboardReady else {
+            bridgeTarget.selectedSegmentIndex = BridgeTarget.allCases.firstIndex(of: previous) ?? 0
+            status.text = "请先开启键盘的完全访问并打开一次 CapsWriter 键盘。若仍无法切换，请检查签名。"
+            return
+        }
+        do {
+            try BridgePairingStore.save(next)
+        } catch {
+            bridgeTarget.selectedSegmentIndex = BridgeTarget.allCases.firstIndex(of: previous) ?? 0
+            status.text = error.localizedDescription
+            return
+        }
+        profiles = next
+        connectionRequest = UUID()
+        voice.stop(message: "已选择\(next.selected.title)。")
+        autoStartPolicy.configurationChanged()
+        showPairing(next.active)
+        if let pairing = next.active { checkConnection(pairing, correct: false) }
+        else { status.text = "\(next.selected.title)尚未配对。请输入地址和配对码，或扫描配对二维码。" }
+    }
+
+    private func showPairing(_ pairing: BridgePairing?) {
+        address.text = pairing?.address
+        token.text = pairing?.token
     }
 }

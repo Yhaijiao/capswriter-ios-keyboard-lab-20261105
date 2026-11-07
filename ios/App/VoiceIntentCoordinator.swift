@@ -26,10 +26,7 @@ final class VoiceIntentCoordinator {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw RecordingIntentError.liveActivityDisabled
         }
-        let address = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
-        let token = UserDefaults.standard.string(forKey: "bridge.token") ?? ""
-        guard BridgeEndpoint(address: address) != nil, BridgeClient.isValidToken(token),
-              !BridgeLease.isExpired(address: address) else { throw RecordingIntentError.invalidPairing }
+        guard let pairing = BridgePairingStore.activePairing(), !pairing.isExpired() else { throw RecordingIntentError.invalidPairing }
         if !hasActiveActivity {
             // A force-quit may leave a visible activity without this new process's
             // microphone owner. End only our own stale activities before retrying.
@@ -52,9 +49,13 @@ final class VoiceIntentCoordinator {
                 }
             }
         }
+        guard BridgePairingStore.activePairing() == pairing else {
+            endActivity()
+            throw RecordingIntentError.invalidPairing
+        }
         if session.active { return }
         // Only this explicit, system-dispatched intent can request background arm.
-        session.start(address: address, token: token, sessionMinutes: 10, intentActivityID: activity?.id)
+        session.start(pairing: pairing, sessionMinutes: 10, intentActivityID: activity?.id)
         do {
             for _ in 0..<200 {
                 if session.active { return }

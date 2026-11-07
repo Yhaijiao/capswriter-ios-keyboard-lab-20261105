@@ -20,7 +20,7 @@ def verify(path, expected_version=None):
         assert spec['NSExtensionAttributes']['IsASCIICapable'] is True
         assert package.read(base + app['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
         assert package.read(extbase + extension['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
-        if expected_version in ('0.4.8', '0.4.9'):
+        if tuple(map(int, app['CFBundleShortVersionString'].split('.'))) >= (0, 4, 8):
             activity_base = base + 'PlugIns/CapsWriterVoiceActivity.appex/'
             activity = plistlib.loads(package.read(activity_base + 'Info.plist'))
             assert activity['CFBundleIdentifier'] == app['CFBundleIdentifier'] + '.activity'

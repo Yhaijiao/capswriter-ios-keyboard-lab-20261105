@@ -48,6 +48,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var hotEditorBar: UIStackView?
     private var hotRevision = ""
     private var hotFileID = "hot"
+    private var hotPairing: BridgePairing?
     private var hotRequest = UUID()
     private weak var hotManager: HotwordManagerView?
     private weak var hotEditorStatus: UILabel?
@@ -57,6 +58,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var hotSaving = false
     private var previewedText: String?
     private var bridgeRequestID = UUID()
+    private var bridgePairing: BridgePairing?
+    private var voicePairing: BridgePairing?
     private var voiceID: String?
     private var voiceState = "idle"
     private var voiceDelivery = VoiceResultDelivery()
@@ -96,6 +99,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         super.viewDidAppear(animated)
         appeared = true
         voiceAgentReady = nil
+        if hasFullAccess { BridgePairingStore.markKeyboardReady() }
+        refreshBridgePairing()
         updatePreferredHeight()
         insertVoiceResultIfReady()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
@@ -401,12 +406,29 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
 
     private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,
                            completion: @escaping (Result<BridgeReply, Error>) -> Void) {
-        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
-                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+        BridgeClient.call(pairing: voicePairing,
                           path: path, value: value, jobID: jobID, completion: completion)
     }
+
+    private func refreshBridgePairing() {
+        let next = hasFullAccess ? BridgePairingStore.activePairing() : nil
+        guard bridgePairing != next else { return }
+        bridgePairing = next
+        readinessRequest = UUID(); readinessPolling = false; voiceAgentReady = nil
+        cancelIntentWarmup()
+        if voicePairing != nil { cancelVoice() }
+        hotRequest = UUID(); bridgeRequestID = UUID(); previewedText = nil
+        hotManager?.removeFromSuperview()
+        if hotEditor != nil {
+            setHotSaving(false)
+            hotEditorStatus?.text = "识别服务已切换，草稿仍保留。请切回原服务后保存。"
+        }
+        viewIfLoaded?.viewWithTag(700)?.removeFromSuperview()
+    }
+
     private func tapVoice() {
         guard hasFullAccess else { voiceMessage = "请在键盘设置允许完全访问，再点击录音。"; updateVoice(); return }
+        refreshBridgePairing()
         guard !voiceBusy else { return }
         if voiceState == "recording", let id = voiceID {
             voiceRevision = UUID(); let revision = voiceRevision; voicePolling = false
@@ -418,6 +440,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             return
         }
         guard !["pending", "stopping", "processing"].contains(voiceState) else { return }
+        guard let pairing = bridgePairing else {
+            voiceMessage = "请在 Lab 配对识别服务。"; updateVoice(); return
+        }
+        voicePairing = pairing
         voiceRevision = UUID(); let revision = voiceRevision
         let documentID = textDocumentProxy.documentIdentifier
         voiceState = "pending"
@@ -426,7 +452,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             guard let self = self else { return }
             guard self.voiceRevision == revision else {
                 if case .success(let reply) = result, let id = reply.id {
-                    self.voiceCall("/v1/voice/cancel", value: ["id": id]) { _ in }
+                    BridgeClient.call(pairing: pairing, path: "/v1/voice/cancel", value: ["id": id]) { _ in }
                 }
                 return
             }
@@ -458,10 +484,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         readinessRequest = UUID(); readinessPolling = false
     }
     private func refreshVoiceReadiness() {
-        guard canUseVoiceIntent, voiceID == nil, !voiceBusy, !readinessPolling else { return }
+        guard canUseVoiceIntent else { return }
+        refreshBridgePairing()
+        guard voiceID == nil, !voiceBusy, !readinessPolling else { return }
         readinessPolling = true; let request = readinessRequest
-        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
-                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+        BridgeClient.call(pairing: bridgePairing,
                           path: "/v1/status", timeout: 3) { [weak self] result in
             guard let self = self, self.readinessRequest == request else { return }
             self.readinessPolling = false
@@ -515,6 +542,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         voiceMessage = message; updateVoice()
     }
     private func pollIntentWarmup(_ request: UUID, deadline: Date) {
+        refreshBridgePairing()
         guard intentWarmupID == request else { return }
         guard appeared, mode == .voice, view.window != nil else { cancelIntentWarmup(); return }
         guard textDocumentProxy.documentIdentifier == intentWarmupDocumentID else {
@@ -524,8 +552,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard remaining > 0 else {
             failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return
         }
-        BridgeClient.call(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
-                          token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+        BridgeClient.call(pairing: bridgePairing,
                           path: "/v1/status", timeout: min(2.5, max(0.25, remaining))) { [weak self] result in
             guard let self = self, self.intentWarmupID == request else { return }
             guard self.appeared, self.mode == .voice, self.view.window != nil else { self.cancelIntentWarmup(); return }
@@ -555,6 +582,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         voiceTimer = timer; RunLoop.main.add(timer, forMode: .common)
     }
     private func pollVoice() {
+        refreshBridgePairing()
         guard !voiceBusy, !voicePolling, let id = voiceID else { return }
         if Date().timeIntervalSince(voiceStarted) > Double(Lab.maxRecordingSeconds + 200) { cancelVoice(); resetVoice("语音任务超时，请重试。"); return }
         voicePolling = true; let revision = voiceRevision
@@ -598,10 +626,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             cancelVoice(); resetVoice("输入框已改变，请重新录音。"); return
         }
         guard let delivery = voiceDelivery.take(visible: true, documentID: documentID) else { return }
+        let pairing = voicePairing
         commitComposition()
         textDocumentProxy.insertText(delivery.text)
         resetVoice("Tap to speak")
-        voiceCall("/v1/voice/consume", value: ["id": delivery.id]) { _ in }
+        BridgeClient.call(pairing: pairing, path: "/v1/voice/consume", value: ["id": delivery.id]) { _ in }
     }
     private func updateVoice() {
         voiceHint?.text = voiceMessage
@@ -616,7 +645,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
-        voiceID = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
+        voiceID = nil; voicePairing = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
         voiceRevision = UUID(); voicePolling = false
         voiceMessage = message; updateVoice()
         refreshVoiceReadiness()
@@ -945,6 +974,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard hasFullAccess else {
             voiceMessage = "热词管理需在键盘设置允许完全访问。"; updateVoice(); return
         }
+        refreshBridgePairing()
         stopDeleting(); commitComposition(); setCandidatesExpanded(false)
         if let manager = hotManager { manager.removeFromSuperview() }
         let manager = HotwordManagerView(); manager.translatesAutoresizingMaskIntoConstraints = false
@@ -970,7 +1000,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func loadHotwords(into manager: HotwordManagerView) {
         hotRequest = UUID(); let request = hotRequest
         manager.showLoading()
-        voiceCall("/v1/hotwords") { [weak self, weak manager] result in
+        BridgeClient.call(pairing: bridgePairing, path: "/v1/hotwords") { [weak self, weak manager] result in
             guard let self = self, self.hotRequest == request, let manager = manager else { return }
             switch result {
             case .success(let reply): manager.show(files: reply.hotword_files ?? [])
@@ -982,7 +1012,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     func showHotwordEditor(_ file: HotwordFile) {
         guard file.writable, hotEditor == nil else { return }
         stopDeleting(); commitComposition(); setCandidatesExpanded(false)
-        hotRequest = UUID(); hotRevision = file.revision; hotFileID = file.id
+        hotRequest = UUID(); hotRevision = file.revision; hotFileID = file.id; hotPairing = bridgePairing
         let editor = UITextView()
         editor.text = file.text; editor.font = .systemFont(ofSize: 15)
         editor.textColor = .white; editor.backgroundColor = Lab.surface; editor.layer.cornerRadius = 9
@@ -1036,11 +1066,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func saveHotwords() {
         guard let editor = hotEditor, !hotSaving else { return }
+        refreshBridgePairing()
+        guard let hotPairing, hotPairing == bridgePairing else {
+            hotEditorStatus?.text = "请切回打开草稿时的识别服务，再保存热词。"; return
+        }
         commitComposition(); stopDeleting()
         hotRequest = UUID(); let request = hotRequest
         let value: [String: Any] = ["file_id": hotFileID, "revision": hotRevision, "text": editor.text ?? ""]
         setHotSaving(true); hotEditorStatus?.text = "正在保存…"
-        voiceCall("/v1/hotwords/save", value: value) { [weak self] result in
+        BridgeClient.call(pairing: hotPairing, path: "/v1/hotwords/save", value: value) { [weak self] result in
             guard let self = self, self.hotRequest == request, self.hotEditor != nil else { return }
             self.setHotSaving(false)
             switch result {
@@ -1074,6 +1108,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func showBridge() {
         guard hasFullAccess else { feedback?.text = "电脑连接需在键盘设置开启“允许完全访问”"; return }
+        refreshBridgePairing()
         if let panel = view.viewWithTag(700) { panel.removeFromSuperview(); return }
         previewedText = nil; bridgeRequestID = UUID()
         let panel = UIStackView(); panel.tag = 700; panel.axis = .vertical; panel.spacing = 10
@@ -1084,8 +1119,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             panel.topAnchor.constraint(equalTo: view.topAnchor), panel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             panel.trailingAnchor.constraint(equalTo: view.trailingAnchor), panel.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        let currentAddress = UserDefaults.standard.string(forKey: "bridge.address") ?? ""
-        let result = Lab.label(currentAddress.isEmpty ? "尚未配对。在主 App 复制配对配置，再回这里粘贴。" : "当前服务：\(currentAddress)\n可在主 App 复制新配置后粘贴。", size: 12, color: Lab.muted)
+        let shared = BridgePairingStore.hasUsedSharedProfiles
+        let currentAddress = bridgePairing?.address ?? "尚未配对"
+        let result = Lab.label("当前服务：\(currentAddress)\n\(shared ? "在 Lab 切换服务或更新配对。" : "旧版配对可从 Lab 复制到这里。")", size: 12, color: Lab.muted)
         let paste = Lab.button("粘贴配对配置", symbol: "doc.on.clipboard") { [weak self, weak result] in
             guard let raw = UIPasteboard.general.string, raw.hasPrefix("cwlab:v1:"),
                   let data = String(raw.dropFirst(9)).data(using: .utf8),
@@ -1094,12 +1130,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                   let endpoint = BridgeEndpoint(address: address), BridgeClient.isValidToken(token) else {
                 result?.text = "请先在主 App 复制配对配置。"; return
             }
-            if let expiry = value["expires"], Double(expiry).map({ !$0.isFinite || $0 <= 0 }) ?? true {
-                result?.text = "配对有效期无效，请重新复制。"; return
+            if let expiry = value["expires"], Double(expiry) == nil { result?.text = "配对有效期无效。"; return }
+            guard let pairing = BridgePairing(address: endpoint.normalizedAddress, token: token,
+                                              expires: value["expires"].flatMap({ Double($0) })), !pairing.isExpired() else {
+                result?.text = "配对已到期或无效。"; return
             }
-            UserDefaults.standard.set(endpoint.normalizedAddress, forKey: "bridge.address")
-            UserDefaults.standard.set(token, forKey: "bridge.token")
-            BridgeLease.apply(address: endpoint.normalizedAddress, expires: value["expires"])
+            guard !BridgePairingStore.hasUsedSharedProfiles else { return }
+            pairing.saveLegacy()
+            self?.bridgePairing = pairing
             self?.cancelIntentWarmup(); self?.stopVoiceReadiness(); self?.voiceAgentReady = nil
             self?.startVoiceReadiness(); self?.updateVoice()
             result?.text = "已保存：\(endpoint.normalizedAddress)"
@@ -1107,8 +1145,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let run = Lab.button("检查版本 / 纠正测试短句") { [weak self, weak result] in
             guard let self = self else { return }
             self.previewedText = nil; let requestID = UUID(); self.bridgeRequestID = requestID; result?.text = "连接中…"
-            BridgeClient.request(address: UserDefaults.standard.string(forKey: "bridge.address") ?? "",
-                                 token: UserDefaults.standard.string(forKey: "bridge.token") ?? "",
+            BridgeClient.request(pairing: self.bridgePairing,
                                  text: "测试热词：卡普斯赖特") { [weak self, weak result] reply in
                 guard self?.bridgeRequestID == requestID else { return }
                 switch reply {
@@ -1126,7 +1163,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let close = Lab.button("返回键盘") { [weak self, weak panel] in
             self?.bridgeRequestID = UUID(); self?.previewedText = nil; panel?.removeFromSuperview()
         }
-        panel.addArrangedSubview(paste); panel.addArrangedSubview(run); panel.addArrangedSubview(result)
+        if !shared { panel.addArrangedSubview(paste) }
+        panel.addArrangedSubview(run); panel.addArrangedSubview(result)
         panel.addArrangedSubview(row([insert, close])); panel.addArrangedSubview(UIView())
     }
 }

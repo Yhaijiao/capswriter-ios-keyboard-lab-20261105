@@ -97,27 +97,28 @@ final class BridgeClient {
         configuration.urlCredentialStorage = nil
         return URLSession(configuration: configuration, delegate: redirectGuard, delegateQueue: nil)
     }()
-    static func request(address: String, token: String, text: String? = nil,
+    static func request(pairing: BridgePairing?, text: String? = nil,
                         completion: @escaping (Result<BridgeReply, Error>) -> Void) {
-        call(address: address, token: token, path: text == nil ? "/v1/status" : "/v1/correct",
+        call(pairing: pairing, path: text == nil ? "/v1/status" : "/v1/correct",
              value: text.map { ["text": $0] }, completion: completion)
     }
 
     @discardableResult
-    static func call(address: String, token: String, path: String, value: [String: Any]? = nil,
+    static func call(pairing: BridgePairing?, path: String, value: [String: Any]? = nil,
                      jobID: String? = nil, timeout: TimeInterval = 10,
                      completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask? {
-        guard let endpoint = BridgeEndpoint(address: address), let url = endpoint.requestURL(path: path, jobID: jobID) else {
+        guard let pairing, let endpoint = BridgeEndpoint(address: pairing.address),
+              let url = endpoint.requestURL(path: path, jobID: jobID) else {
             completion(.failure(BridgeError.invalidAddress)); return nil
         }
-        guard !BridgeLease.isExpired(address: endpoint.normalizedAddress) else {
+        guard !pairing.isExpired() else {
             completion(.failure(BridgeError.message("试验服务器配置已到期，请更新配对配置。"))); return nil
         }
-        guard isValidToken(token) else {
+        guard isValidToken(pairing.token) else {
             completion(.failure(BridgeError.invalidToken)); return nil
         }
         var request = URLRequest(url: url, timeoutInterval: timeout)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(pairing.token)", forHTTPHeaderField: "Authorization")
         if let value = value {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

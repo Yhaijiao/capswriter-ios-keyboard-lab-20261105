@@ -7,8 +7,8 @@ settings:
   base:
     SWIFT_VERSION: '5.0'
     TARGETED_DEVICE_FAMILY: '1'
-    MARKETING_VERSION: '0.4.9'
-    CURRENT_PROJECT_VERSION: '22'
+    MARKETING_VERSION: '0.4.10'
+    CURRENT_PROJECT_VERSION: '23'
     CODE_SIGNING_ALLOWED: NO
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
@@ -19,6 +19,10 @@ targets:
       - path: ios/App
       - path: ios/IntentShared
       - path: ios/Shared
+    entitlements:
+      path: ios/App/CapsWriterLab.entitlements
+      properties:
+        keychain-access-groups: ['$(AppIdentifierPrefix)org.capswriterlab.voice-pairings']
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.capswriterlab.keyboard
@@ -56,6 +60,10 @@ targets:
       - path: ios/Keyboard
       - path: ios/IntentShared
       - path: ios/Shared
+    entitlements:
+      path: ios/Keyboard/CapsWriterKeyboard.entitlements
+      properties:
+        keychain-access-groups: ['$(AppIdentifierPrefix)org.capswriterlab.voice-pairings']
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.capswriterlab.keyboard.extension

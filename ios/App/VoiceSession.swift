@@ -18,7 +18,7 @@ final class VoiceSession {
     private var samples = Data()
     private var timer: Timer?
     private var agentID = UUID().uuidString
-    private var address = "", token = ""
+    private var pairing: BridgePairing?
     private var expires = Date.distantPast
     private var lastSuccess = Date.distantPast
     private var polling = false
@@ -44,21 +44,21 @@ final class VoiceSession {
             name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     }
 
-    func start(address: String, token: String, sessionMinutes: Int = 10, intentActivityID: String? = nil) {
+    func start(pairing: BridgePairing, sessionMinutes: Int = 10, intentActivityID: String? = nil) {
         guard !active, !starting else { return }
         starting = true
         let selected = UserDefaults.standard.string(forKey: "voice.recognitionMode") ?? "cloud"
         recognitionMode = ["phone-zh", "phone-en"].contains(selected) ? selected : "cloud"
         let request = UUID(); generation = request
         onStatus?("正在检查识别服务连接…")
-        BridgeClient.request(address: address, token: token) { [weak self] response in
+        BridgeClient.request(pairing: pairing) { [weak self] response in
             guard let self = self, self.generation == request else { return }
             switch response {
             case .failure(let error):
                 self.starting = false; self.onStatus?(error.localizedDescription)
             case .success(let reply):
                 if self.recognitionMode != "cloud" && reply.phone_asr_v1 != true {
-                    self.starting = false; self.onStatus?("请先升级配对服务，或切回 AWS 云端识别。"); return
+                    self.starting = false; self.onStatus?("请先升级配对服务，或切回服务端识别。"); return
                 }
                 guard reply.voice_enabled == true, reply.asr_ready == true else {
                     self.starting = false
@@ -71,7 +71,7 @@ final class VoiceSession {
                     return
                 }
                 if AVAudioApplication.shared.recordPermission == .granted {
-                    self.prepareAndArm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID, request: request)
+                    self.prepareAndArm(pairing: pairing, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID, request: request)
                     return
                 }
                 if AVAudioApplication.shared.recordPermission == .denied {
@@ -86,16 +86,16 @@ final class VoiceSession {
                             self.starting = false
                             self.onStatus?("请在 App 设置中允许麦克风后重试。"); return
                         }
-                        self.prepareAndArm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID, request: request)
+                        self.prepareAndArm(pairing: pairing, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID, request: request)
                     }
                 }
             }
         }
     }
 
-    private func prepareAndArm(address: String, token: String, sessionMinutes: Int, intentActivityID: String?, request: UUID) {
+    private func prepareAndArm(pairing: BridgePairing, sessionMinutes: Int, intentActivityID: String?, request: UUID) {
         guard recognitionMode != "cloud" else {
-            arm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID); return
+            arm(pairing: pairing, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID); return
         }
         guard #available(iOS 26.0, *) else {
             starting = false; onStatus?("手机识别需要 iOS 26，可随时切回 AWS 云端。"); return
@@ -107,7 +107,7 @@ final class VoiceSession {
                 let locale = try await PhoneSpeechRecognizer.prepareLocale(identifier)
                 guard let self = self, !Task.isCancelled, self.generation == request else { return }
                 self.phoneLocale = locale
-                self.arm(address: address, token: token, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID)
+                self.arm(pairing: pairing, sessionMinutes: sessionMinutes, intentActivityID: intentActivityID)
             } catch {
                 guard let self = self, self.generation == request else { return }
                 self.starting = false; self.onStatus?("手机识别未能准备：\(error.localizedDescription)\n可切回 AWS 云端。")
@@ -115,7 +115,7 @@ final class VoiceSession {
         }
     }
 
-    private func arm(address: String, token: String, sessionMinutes: Int, intentActivityID: String?) {
+    private func arm(pairing: BridgePairing, sessionMinutes: Int, intentActivityID: String?) {
         // Connection or permission callbacks can arrive after the user leaves
         // Lab. Complete a fresh microphone start while the app is visible.
         let validIntentActivity = intentActivityID.map { identifier in
@@ -126,7 +126,7 @@ final class VoiceSession {
             onStatus?("请回到 Lab 完成开启语音会话。")
             return
         }
-        self.address = address; self.token = token
+        self.pairing = pairing
         self.sessionMinutes = [10, 30, 60].contains(sessionMinutes) ? sessionMinutes : 10
         do {
             let session = AVAudioSession.sharedInstance()
@@ -189,7 +189,7 @@ final class VoiceSession {
         if Date().timeIntervalSince(lastSuccess) > 8 { stop(message: "识别服务连接已断开，麦克风已关闭。"); return }
         guard !polling else { return }
         polling = true; let current = generation
-        BridgeClient.call(address: address, token: token, path: "/v1/voice/agent",
+        BridgeClient.call(pairing: pairing, path: "/v1/voice/agent",
                           value: ["agent_id": agentID], timeout: 4) { [weak self] result in
             guard let self = self, self.generation == current, self.active else { return }
             self.polling = false
@@ -242,7 +242,7 @@ final class VoiceSession {
         lock.lock()
         if segmentID != id { segmentID = id; samples = Data() }
         lock.unlock()
-        BridgeClient.call(address: address, token: token, path: "/v1/voice/ack",
+        BridgeClient.call(pairing: pairing, path: "/v1/voice/ack",
                           value: ["id": id, "agent_id": agentID]) { _ in }
         onStatus?(recognitionMode == "cloud" ? "正在录音 · 单段最长 5 分钟，可在键盘停止。" : "手机正在识别 · 单段最长 5 分钟，可在键盘停止。")
     }
@@ -285,7 +285,7 @@ final class VoiceSession {
 
     private func submitSegment(_ id: String, path: String, content: [String: Any], generation current: UUID) {
         var value = content; value["id"] = id; value["agent_id"] = agentID
-        BridgeClient.call(address: address, token: token, path: path,
+        BridgeClient.call(pairing: pairing, path: path,
                           value: value,
                           timeout: 190) { [weak self] result in
             guard let self = self, self.generation == current else { return }
@@ -312,9 +312,10 @@ final class VoiceSession {
         if #available(iOS 26.0, *), let phone = phone as? PhoneSpeechRecognizer { phone.cancel() }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         if wasActive {
-            BridgeClient.call(address: address, token: token, path: "/v1/voice/agent",
+            BridgeClient.call(pairing: pairing, path: "/v1/voice/agent",
                               value: ["agent_id": agentID, "active": false]) { _ in }
         }
+        pairing = nil
         onStatus?(message)
         onStopped?()
     }
