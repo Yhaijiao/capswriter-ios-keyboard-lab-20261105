@@ -61,7 +61,7 @@ jobs:
           sed 's/$(AppIdentifierPrefix)/CAPSWTEST0./g' ios/App/CapsWriterLab.entitlements > build/sideload.entitlements
           for BUNDLE in "$KEYBOARD" "$APP"; do
             codesign --force --sign - --generate-entitlement-der --entitlements build/sideload.entitlements "$BUNDLE"
-            codesign --display --entitlements - "$BUNDLE" > build/sideload-observed.plist
+            codesign --display --entitlements - --xml "$BUNDLE" > build/sideload-observed.plist
             test "$(/usr/libexec/PlistBuddy -c 'Print :keychain-access-groups:0' build/sideload-observed.plist)" = CAPSWTEST0.org.capswriterlab.voice-pairings
           done
           codesign --verify --deep --strict "$APP"
