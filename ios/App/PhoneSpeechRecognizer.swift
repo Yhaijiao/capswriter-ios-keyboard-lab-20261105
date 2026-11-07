@@ -123,7 +123,7 @@ final class PhoneSpeechRecognizer: @unchecked Sendable {
         guard !stopped, failure == nil else { return }
         pieces.removeAll { piece in
             CMTimeCompare(piece.range.start, range.start) == 0 ||
-            CMTimeGetSeconds(CMTimeRangeGetIntersection(piece.range, range).duration) > 0
+            CMTimeGetSeconds(CMTimeRangeGetIntersection(piece.range, otherRange: range).duration) > 0
         }
         pieces.append(Piece(range: range, text: text))
         pieces.sort { CMTimeCompare($0.range.start, $1.range.start) < 0 }
