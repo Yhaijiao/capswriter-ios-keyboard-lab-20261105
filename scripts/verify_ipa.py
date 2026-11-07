@@ -1,6 +1,7 @@
 """Inspect an IPA before handing it to a local signing tool."""
 import json
 import plistlib
+import re
 import sys
 import zipfile
 
@@ -31,6 +32,10 @@ def verify(path, expected_version=None):
             assert activity['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
             assert app.get('NSSupportsLiveActivities') is True
             assert package.read(activity_base + activity['CFBundleExecutable'])[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
+            if tuple(map(int, app['CFBundleShortVersionString'].split('.'))) >= (0, 4, 12):
+                for bundle in (app, extension, activity):
+                    name = bundle['CFBundleDisplayName']
+                    assert re.fullmatch(r'[A-Za-z0-9 ]+', name), f'Invalid SideStore App ID name: {name!r}'
         if any(name.endswith('pinyin-lexicon.json') for name in package.namelist()):
             assert app.get('CFBundleShortVersionString') == extension.get('CFBundleShortVersionString'), 'Mismatched versions'
             if expected_version is not None:
