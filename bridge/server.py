@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, parse_qs
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine import DemoEngine, DesktopEngine
-from voice import VoiceRelay, DesktopASR, VoiceError, MAX_AUDIO
+from voice import VoiceRelay, DesktopASR, VoiceError, MAX_AUDIO, MAX_AUDIO_S16
 from hotwords import HotwordStore, HotwordError, MAX_HOT_BYTES
 
 MAX_BODY = 32768
@@ -74,6 +74,10 @@ def make_handler(engine, token, voice=None, hotwords=None):
 
         def do_POST(self):
             if not self.authorized(): return
+            parts = urlsplit(self.path)
+            content_type = self.headers.get('Content-Type', '').split(';')[0].strip().lower()
+            if parts.path == '/v1/voice/audio' and voice is not None and content_type == 'application/octet-stream':
+                self.handle_voice_binary(parse_qs(parts.query)); return
             voice_paths = ('/v1/voice/agent', '/v1/voice/start', '/v1/voice/ack',
                            '/v1/voice/stop', '/v1/voice/cancel', '/v1/voice/consume', '/v1/voice/audio', '/v1/voice/text')
             is_voice = self.path in voice_paths and voice is not None
@@ -109,6 +113,35 @@ def make_handler(engine, token, voice=None, hotwords=None):
                 self.reply(400, {'error': 'Invalid JSON or text'}); return
             try: self.reply(200, asdict(engine.correct(text)))
             except Exception: self.reply(503, {'error': 'Desktop correction unavailable; check local console'})
+
+        def handle_voice_binary(self, query):
+            """Raw int16 upload. The job is marked as receiving before the body
+            is read, so heartbeats stuck behind a slow upload don't fail it."""
+            first = lambda key: query.get(key, [''])[0]
+            job_id = first('id')
+            try: length = int(self.headers.get('Content-Length', '-1'))
+            except ValueError: length = -1
+            if not 0 < length <= MAX_AUDIO_S16:
+                self.reply(413, {'error': '录音最长 5 分钟。'}); return
+            try:
+                rate = int(first('sample_rate') or '0')
+                voice.begin_receive(job_id, first('agent_id'), first('encoding'), rate, length)
+            except ValueError: self.reply(400, {'error': 'Invalid sample rate'}); return
+            except VoiceError as error: self.reply(error.status, {'error': str(error)}); return
+            self.connection.settimeout(30)
+            try:
+                raw = self.rfile.read(length)
+                if len(raw) != length: raise ValueError('Incomplete body')
+            except (OSError, ValueError):
+                voice.abort_receive(job_id)
+                try: self.reply(400, {'error': '录音上传中断，请重试。'})
+                except OSError: pass
+                return
+            try: self.reply(200, voice.upload_pcm(job_id, first('agent_id'), raw))
+            except VoiceError as error: self.reply(error.status, {'error': str(error)})
+            except Exception:
+                voice.abort_receive(job_id)
+                self.reply(503, {'error': '语音服务暂不可用，请检查电脑服务。'})
 
         def handle_voice(self, value):
             try:

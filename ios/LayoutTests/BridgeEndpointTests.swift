@@ -12,6 +12,25 @@ final class BridgeEndpointTests: XCTestCase {
         XCTAssertNil(BridgeEndpoint(address: "https://speech.example.com:65536"))
     }
 
+    func testBinaryUploadQueryKeepsJobAndMetadata() {
+        let endpoint = BridgeEndpoint(address: "https://speech.example.com/unused?secret=discard")!
+        let url = endpoint.requestURL(path: "/v1/voice/audio", query: [
+            URLQueryItem(name: "id", value: "job"), URLQueryItem(name: "encoding", value: "s16le")])!
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(url.path, "/v1/voice/audio")
+        XCTAssertEqual(items.map(\.name), ["id", "encoding"])
+        XCTAssertFalse(url.absoluteString.contains("secret"))
+    }
+
+    func testOnlyNetworkAndGatewayFailuresAreTransient() {
+        XCTAssertTrue(BridgeError.isTransient(URLError(.timedOut)))
+        XCTAssertTrue(BridgeError.isTransient(URLError(.networkConnectionLost)))
+        XCTAssertTrue(BridgeError.isTransient(BridgeError.server(502)))
+        XCTAssertFalse(BridgeError.isTransient(BridgeError.server(401)))
+        XCTAssertFalse(BridgeError.isTransient(BridgeError.message("录音任务已过期，请重新开始。")))
+        XCTAssertFalse(BridgeError.isTransient(BridgeError.invalidReply))
+    }
+
     func testRequestReplacesAddressPathAndQuery() {
         let endpoint = BridgeEndpoint(address: "HTTPS://SPEECH.EXAMPLE.COM/unused?secret=discard#fragment")!
         let request = endpoint.requestURL(path: "/v1/status")!

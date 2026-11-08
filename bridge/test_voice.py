@@ -51,6 +51,8 @@ class VoiceTests(unittest.TestCase):
     def test_cold_or_dead_agent_cannot_record(self):
         with self.assertRaisesRegex(VoiceError, '主 App'): self.relay.start()
         job_id = self.begin(); self.now += 9
+        self.assertEqual(self.relay.result(job_id)['state'], 'recording')  # cellular blip
+        self.now += 12
         self.assertEqual(self.relay.result(job_id)['state'], 'error')
         with self.assertRaises(VoiceError): self.relay.upload(self.payload(job_id))
 
@@ -140,6 +142,64 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result['state'], 'cancelled')
         self.assertEqual(result['text'], '')
 
+    def s16(self, seconds=1.0, value=3277):
+        return struct.pack('<h', value) * int(16000 * seconds)
+
+    def test_binary_int16_upload_survives_slow_transfer(self):
+        job_id = self.begin(); self.relay.stop(job_id)
+        pcm = self.s16()
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, len(pcm))
+        self.assertEqual(self.relay.result(job_id)['state'], 'processing')
+        self.now += 120  # heartbeats queued behind a slow upload
+        self.assertEqual(self.relay.result(job_id)['state'], 'processing')
+        result = self.relay.upload_pcm(job_id, self.agent, pcm)
+        self.assertEqual(result['state'], 'done')
+        self.assertEqual(result['text'], 'CapsWriter')
+        self.assertEqual(len(self.asr.pcm), len(pcm) * 2)
+        self.assertAlmostEqual(struct.unpack('<f', self.asr.pcm[:4])[0], 3277 / 32768, places=5)
+        self.assertNotIn('receiving_since', result)
+
+    def test_long_recording_upload_is_not_cut_by_total_age(self):
+        job_id = self.begin()
+        for _ in range(29):
+            self.now += 10; self.relay.agent(self.agent)
+        self.relay.stop(job_id)
+        pcm = self.s16(seconds=2)
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, len(pcm))
+        self.now += 60
+        self.assertEqual(self.relay.upload_pcm(job_id, self.agent, pcm)['state'], 'done')
+        self.now += 100
+        self.assertEqual(self.relay.result(job_id)['state'], 'done')  # still readable
+
+    def test_interrupted_binary_upload_can_retry(self):
+        job_id = self.begin(); self.relay.stop(job_id)
+        pcm = self.s16()
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, len(pcm))
+        self.relay.abort_receive(job_id)
+        self.assertEqual(self.relay.result(job_id)['state'], 'stopping')
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, len(pcm))
+        self.assertEqual(self.relay.upload_pcm(job_id, self.agent, pcm)['state'], 'done')
+
+    def test_stalled_binary_upload_expires(self):
+        job_id = self.begin(); self.relay.stop(job_id)
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, 32000)
+        self.now += 201
+        self.assertEqual(self.relay.result(job_id)['state'], 'error')
+
+    def test_binary_upload_validation_and_cancel(self):
+        job_id = self.begin()
+        for encoding, rate, length in (('f32le', 16000, 32000), ('s16le', 8000, 32000),
+                                       ('s16le', 16000, 3), ('s16le', 16000, 10),
+                                       ('s16le', 16000, 16000 * 301 * 2)):
+            with self.assertRaises(VoiceError):
+                self.relay.begin_receive(job_id, self.agent, encoding, rate, length)
+        with self.assertRaises(VoiceError):
+            self.relay.begin_receive(job_id, 'wrong', 's16le', 16000, 32000)
+        self.relay.begin_receive(job_id, self.agent, 's16le', 16000, 32000)
+        self.relay.cancel(job_id)
+        with self.assertRaises(VoiceError): self.relay.upload_pcm(job_id, self.agent, self.s16())
+        self.assertEqual(self.relay.result(job_id)['state'], 'cancelled')
+
     def test_asr_failure_is_recoverable(self):
         job_id = self.begin()
         def fail(*args): raise ConnectionError('private implementation detail')
@@ -173,6 +233,25 @@ class VoiceHTTPTests(unittest.TestCase):
             self.assertEqual(result[1]['text'], 'CapsWriter')
             self.assertEqual(request('/v1/voice/result?id=' + job_id)[1]['state'], 'done')
             self.assertTrue(request('/v1/status')[1]['phone_asr_v1'])
+            self.assertTrue(request('/v1/status')[1]['audio_s16_v1'])
+            request('/v1/voice/consume', {'id': job_id})
+            code, binary_job = request('/v1/voice/start', {}); self.assertEqual(code, 200)
+            binary_id = binary_job['id']
+            request('/v1/voice/ack', {'id': binary_id, 'agent_id': 'http-test-phone-id'})
+            request('/v1/voice/stop', {'id': binary_id})
+            def binary(query, body, token='test-token'):
+                req = Request(f'http://127.0.0.1:{server.server_port}/v1/voice/audio?' + query, body,
+                              {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream'})
+                try:
+                    with urlopen(req, timeout=5) as response: return response.status, json.load(response)
+                except HTTPError as response: return response.code, json.load(response)
+            query = f'id={binary_id}&agent_id=http-test-phone-id&encoding=s16le&sample_rate=16000'
+            pcm = struct.pack('<h', 0) * 16000
+            self.assertEqual(binary(query, pcm, 'wrong')[0], 401)
+            self.assertEqual(binary(query.replace('s16le', 'f32le'), pcm)[0], 400)
+            code, value = binary(query, pcm)
+            self.assertEqual((code, value['text']), (200, 'CapsWriter'))
+            job_id = binary_id
             request('/v1/voice/consume', {'id': job_id})
             code, phone_job = request('/v1/voice/start', {}); self.assertEqual(code, 200)
             phone_id = phone_job['id']

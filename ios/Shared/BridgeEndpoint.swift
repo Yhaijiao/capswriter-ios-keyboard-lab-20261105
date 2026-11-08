@@ -65,11 +65,12 @@ struct BridgeEndpoint {
         port = explicitPort ?? (parsedScheme == "https" ? 443 : 80)
     }
 
-    func requestURL(path: String, jobID: String? = nil) -> URL? {
+    func requestURL(path: String, jobID: String? = nil, query: [URLQueryItem] = []) -> URL? {
         guard path.hasPrefix("/"), !path.hasPrefix("//"),
               var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         parts.path = path; parts.query = nil; parts.fragment = nil
-        if let jobID = jobID { parts.queryItems = [URLQueryItem(name: "id", value: jobID)] }
+        let items = (jobID.map { [URLQueryItem(name: "id", value: $0)] } ?? []) + query
+        if !items.isEmpty { parts.queryItems = items }
         return parts.url
     }
 

@@ -67,6 +67,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var voiceTimer: Timer?
     private var voiceBusy = false
     private var voicePolling = false
+    /// First failed result poll in the current run of failures.
+    private var voiceFailureSince: Date?
     private var voiceRevision = UUID()
     private weak var voiceHint: UILabel?
     private weak var voiceButton: UIButton?
@@ -435,7 +437,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             voiceBusy = true; voiceMessage = "正在结束录音…"; updateVoice()
             voiceCall("/v1/voice/stop", value: ["id": id]) { [weak self] result in
                 guard let self = self, self.voiceID == id, self.voiceRevision == revision else { return }
-                self.voiceBusy = false; self.handleVoice(result)
+                self.voiceBusy = false
+                if case .failure(let error) = result, BridgeError.isTransient(error) {
+                    // Recording keeps going on the phone; let the user tap stop again.
+                    self.voiceMessage = "网络不稳，停止未送达 · 请再点一次停止"; self.updateVoice(); return
+                }
+                self.handleVoice(result)
             }
             return
         }
@@ -588,9 +595,20 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         voicePolling = true; let revision = voiceRevision
         voiceCall("/v1/voice/result", jobID: id) { [weak self] result in
             guard let self = self, self.voiceID == id, self.voiceRevision == revision else { return }
-            self.voicePolling = false; self.handleVoice(result)
+            self.voicePolling = false
+            // One dropped poll on cellular must not cancel a long recording.
+            // Only a sustained outage, or the service's own answer, ends the job.
+            if case .failure(let error) = result, BridgeError.isTransient(error) {
+                let since = self.voiceFailureSince ?? Date(); self.voiceFailureSince = since
+                if Date().timeIntervalSince(since) < Self.voicePollGrace {
+                    self.voiceMessage = "网络不稳，正在重连…"; self.updateVoice(); return
+                }
+            }
+            self.voiceFailureSince = nil
+            self.handleVoice(result)
         }
     }
+    private static let voicePollGrace: TimeInterval = 20
     private func handleVoice(_ result: Result<BridgeReply, Error>) {
         switch result {
         case .failure(let error):
@@ -646,7 +664,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
         voiceID = nil; voicePairing = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
-        voiceRevision = UUID(); voicePolling = false
+        voiceRevision = UUID(); voicePolling = false; voiceFailureSince = nil
         voiceMessage = message; updateVoice()
         refreshVoiceReadiness()
     }
