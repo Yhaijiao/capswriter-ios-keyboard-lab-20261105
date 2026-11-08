@@ -250,7 +250,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if appeared && mode == .voice { startVoiceReadiness() }
     }
     private func buildChrome() {
-        let brand = Lab.label("◖ CapsWriter", size: 19); brand.font = .boldSystemFont(ofSize: 19)
+        let brand = Lab.label("◖ SayKey", size: 19); brand.font = .boldSystemFont(ofSize: 19)
         let selector = UISegmentedControl(items: ["", "EN", "拼"])
         selector.setImage(UIImage(systemName: "waveform"), forSegmentAt: 0)
         selector.backgroundColor = UIColor(white: 0.13, alpha: 1)

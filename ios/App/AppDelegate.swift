@@ -41,7 +41,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "CapsWriter Lab"
+        title = "SayKey Lab"
         UserDefaults.standard.register(defaults: ["voice.autoStart": true])
         view.backgroundColor = Lab.background
         scroll.keyboardDismissMode = .interactive
@@ -69,13 +69,13 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(title)
         stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n手机采集语音，交给你配对的识别服务处理。支持英文输入、离线拼音与三页滑动切换。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("1  启用键盘", size: 21))
-        stack.addArrangedSubview(Lab.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → CapsWriter Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → SayKey Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Lab.muted))
         stack.addArrangedSubview(Lab.button("打开 App 设置", symbol: "gearshape") {
             guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
             UIApplication.shared.open(url)
         })
         stack.addArrangedSubview(Lab.label("2  在这里试一试", size: 21))
-        editor.text = "点击这里，长按地球键切换到 CapsWriter Lab。\n"
+        editor.text = "点击这里，长按地球键切换到 SayKey Lab。\n"
         editor.delegate = self
         editor.font = .systemFont(ofSize: 18)
         editor.textColor = .white; editor.backgroundColor = Lab.surface
@@ -323,7 +323,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         next.selected = BridgeTarget.allCases[index]
         guard BridgePairingStore.keyboardReady else {
             bridgeTarget.selectedSegmentIndex = BridgeTarget.allCases.firstIndex(of: previous) ?? 0
-            status.text = "请先开启键盘的完全访问并打开一次 CapsWriter 键盘。若仍无法切换，请检查签名。"
+            status.text = "请先开启键盘的完全访问并打开一次 SayKey 键盘。若仍无法切换，请检查签名。"
             return
         }
         do {

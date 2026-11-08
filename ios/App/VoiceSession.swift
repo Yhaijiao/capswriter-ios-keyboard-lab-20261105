@@ -65,7 +65,7 @@ final class VoiceSession {
                 }
                 guard reply.voice_enabled == true, reply.asr_ready == true else {
                     self.starting = false
-                    self.onStatus?("请启动配对的 CapsWriter 识别服务后重试。")
+                    self.onStatus?("请启动配对的语音识别服务后重试。")
                     return
                 }
                 self.binaryAudio = reply.audio_s16_v1 == true

@@ -9,7 +9,7 @@ struct RecordingActivityWidget: Widget {
             HStack {
                 Image(systemName: "mic.fill").foregroundStyle(.red)
                 VStack(alignment: .leading) {
-                    Text("CapsWriter 语音会话").bold()
+                    Text("SayKey 语音会话").bold()
                     Text(context.state.message).font(.caption)
                     Text(context.state.expiresAt, style: .timer).monospacedDigit()
                 }
@@ -22,7 +22,7 @@ struct RecordingActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) { Image(systemName: "mic.fill").foregroundStyle(.red) }
-                DynamicIslandExpandedRegion(.center) { Text("CapsWriter 语音会话") }
+                DynamicIslandExpandedRegion(.center) { Text("SayKey 语音会话") }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack {
                         Text(context.state.expiresAt, style: .timer).monospacedDigit()

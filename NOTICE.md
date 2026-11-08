@@ -1,5 +1,9 @@
 # Third-party components
 
+SayKey is an independent project. It is not affiliated with or endorsed by
+CapsWriter-Offline; it only talks to a speech-recognition server that the user
+runs themselves.
+
 The optional desktop adapter reads code from the user's installed
 [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline).
 That source code is not included or relicensed in this repository. Its original

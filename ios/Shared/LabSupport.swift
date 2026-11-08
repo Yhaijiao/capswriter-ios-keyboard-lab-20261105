@@ -3,8 +3,8 @@ import UIKit
 enum Lab {
     static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
     static let maxRecordingSeconds = 300
-    static let chineseSample = "这是 CapsWriter 手机键盘测试。"
-    static let englishSample = "CapsWriter keyboard test. "
+    static let chineseSample = "这是 SayKey 手机键盘测试。"
+    static let englishSample = "SayKey keyboard test. "
     static let background = UIColor(red: 0.075, green: 0.075, blue: 0.085, alpha: 1)
     static let surface = UIColor(white: 0.17, alpha: 1)
     static let muted = UIColor(white: 0.67, alpha: 1)
