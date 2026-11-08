@@ -26,7 +26,9 @@ final class VoiceSession {
     private var completingID: String?
     private var generation = UUID()
     private var lastFrames = Date.distantPast
-    private var sessionMinutes = 10
+    private var sessionMinutes = 60
+    /// A renewal that arrived while the session was still starting.
+    private var pendingMinutes = 0
     private var recognitionMode = "cloud"
     private var phoneLocale: Locale?
     private var phoneRecognizer: AnyObject?
@@ -47,7 +49,27 @@ final class VoiceSession {
             name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
     }
 
-    func start(pairing: BridgePairing, sessionMinutes: Int = 10, intentActivityID: String? = nil) {
+    /// Remaining session time, or nil while the microphone is off.
+    var remaining: TimeInterval? { active ? max(0, expires.timeIntervalSinceNow) : nil }
+
+    /// Opened from the keyboard: keep a live session going for `minutes`
+    /// without restarting the microphone, or start one if it has lapsed.
+    func renew(pairing: BridgePairing, minutes: Int) {
+        if active {
+            extend(minutes: minutes)
+            onStatus?("语音会话已续到 \(minutes) 分钟 · 麦克风持续工作。\n点左上角「◀」回到刚才的 App，键盘会自动开始录音。")
+            return
+        }
+        if starting { pendingMinutes = max(pendingMinutes, minutes); return }
+        start(pairing: pairing, sessionMinutes: minutes)
+    }
+
+    private func extend(minutes: Int) {
+        let until = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        if until > expires { expires = until }
+    }
+
+    func start(pairing: BridgePairing, sessionMinutes: Int = 60, intentActivityID: String? = nil) {
         guard !active, !starting else { return }
         starting = true
         let selected = UserDefaults.standard.string(forKey: "voice.recognitionMode") ?? "cloud"
@@ -131,7 +153,8 @@ final class VoiceSession {
             return
         }
         self.pairing = pairing
-        self.sessionMinutes = [10, 30, 60].contains(sessionMinutes) ? sessionMinutes : 10
+        self.sessionMinutes = max([10, 30, 60].contains(sessionMinutes) ? sessionMinutes : 60, pendingMinutes)
+        pendingMinutes = 0
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement, options: [])
@@ -252,6 +275,9 @@ final class VoiceSession {
     }
 
     private func beginSegment(_ id: String) {
+        // Every recording renews the session, so a session in use never runs
+        // out and the keyboard only needs Lab once it has actually lapsed.
+        extend(minutes: sessionMinutes)
         lock.lock()
         if segmentID != id { segmentID = id; samples = Data() }
         lock.unlock()
@@ -374,6 +400,7 @@ final class VoiceSession {
         finalizationTask?.cancel(); finalizationTask = nil
         finishTimeout?.cancel(); finishTimeout = nil
         let wasActive = active; active = false; starting = false; polling = false; uploading = false
+        pendingMinutes = 0
         audio.stop()
         if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false }
         converter = nil
