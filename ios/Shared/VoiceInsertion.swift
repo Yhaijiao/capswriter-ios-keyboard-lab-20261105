@@ -81,6 +81,19 @@ struct VoiceUndoRecord {
 enum VoiceSessionRenewal {
     /// Opened by the keyboard. Lab starts or extends the session to 60 minutes.
     static let url = URL(string: "capswriterlab://renew")!
+    static func url(returningTo bundleID: String?) -> URL {
+        guard let bundleID, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        parts.queryItems = [URLQueryItem(name: "return", value: bundleID)]
+        return parts.url ?? url
+    }
+    /// The app to send the user back to, if the keyboard could tell.
+    static func returnBundleID(from url: URL) -> String? {
+        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "return" })?.value
+        guard let value, !value.isEmpty, value.count <= 200,
+              value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }) else { return nil }
+        return value
+    }
     static let minutes = 60
     /// A return to the keyboard within this window still counts as the same tap.
     static let resumeWindow: TimeInterval = 120

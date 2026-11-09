@@ -19,7 +19,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
               let controller = navigation.viewControllers.first as? LabViewController else { return false }
         switch url.host {
         case "pair": controller.offerPairing(url); return true
-        case "renew": controller.renewFromKeyboard(); return true
+        case "renew": controller.renewFromKeyboard(returnTo: VoiceSessionRenewal.returnBundleID(from: url)); return true
         default: return false
         }
     }
@@ -120,11 +120,11 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.button("用服务规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
-        stack.addArrangedSubview(Lab.label("保存配对配置后，打开 Lab 自动开启 10 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Lab.muted))
+        stack.addArrangedSubview(Lab.label("保存配对配置后，打开 Lab 自动开启 60 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Lab.muted))
         automaticSession.isOn = UserDefaults.standard.bool(forKey: "voice.autoStart")
         automaticSession.accessibilityIdentifier = "voice-auto-start"
         automaticSession.addTarget(self, action: #selector(automaticSessionChanged), for: .valueChanged)
-        let autoRow = UIStackView(arrangedSubviews: [Lab.label("打开 Lab 自动开启 10 分钟", size: 16), automaticSession])
+        let autoRow = UIStackView(arrangedSubviews: [Lab.label("打开 Lab 自动开启 60 分钟", size: 16), automaticSession])
         autoRow.axis = .horizontal; autoRow.spacing = 12; autoRow.alignment = .center
         stack.addArrangedSubview(autoRow)
         stack.addArrangedSubview(Lab.label("识别方式 · 手机为可撤回实验", size: 16))
@@ -185,7 +185,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     /// The keyboard found the session lapsed and sent the user here. Start or
     /// extend it to 60 minutes; iOS only lets the user go back themselves,
     /// via the "◀" in the status bar, and the keyboard then starts recording.
-    func renewFromKeyboard() {
+    func renewFromKeyboard(returnTo bundleID: String? = nil) {
         view.endEditing(true)
         guard let pairing = BridgePairingStore.activePairing(), !pairing.isExpired() else {
             voiceStatus.text = "请先在下方配对识别服务，再回键盘录音。"; return
@@ -197,6 +197,35 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
             if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
         }
+        if let bundleID = bundleID { returnWhenSessionIsUp(to: bundleID, attempts: 50) }
+    }
+
+    /// Once the microphone is on, go back to the app the keyboard was in.
+    private func returnWhenSessionIsUp(to bundleID: String, attempts: Int) {
+        guard attempts > 0, UIApplication.shared.applicationState == .active else { return }
+        guard voice.active else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.returnWhenSessionIsUp(to: bundleID, attempts: attempts - 1)
+            }
+            return
+        }
+        if !Self.openApplication(bundleID) {
+            navigationItem.prompt = "语音会话已续上 · 请点左上角「◀」返回，键盘会自动录音"
+        }
+    }
+
+    /// iOS has no public "go back" call; this private workspace call works on
+    /// some versions for sideloaded builds. Fails quietly when unavailable.
+    private static func openApplication(_ bundleID: String) -> Bool {
+        guard let type = NSClassFromString("LSApplicationWorkspace") else { return false }
+        let shared = NSSelectorFromString("defaultWorkspace")
+        let typeObject = type as AnyObject
+        guard typeObject.responds(to: shared),
+              let workspace = typeObject.perform(shared)?.takeUnretainedValue() as? NSObject else { return false }
+        let open = NSSelectorFromString("openApplicationWithBundleID:")
+        guard workspace.responds(to: open), let method = workspace.method(for: open) else { return false }
+        typealias Open = @convention(c) (AnyObject, Selector, NSString) -> Bool
+        return unsafeBitCast(method, to: Open.self)(workspace, open, bundleID as NSString)
     }
     @objc private func recognitionModeChanged() {
         let value = ["cloud", "phone-zh", "phone-en"][max(0, min(2, recognitionMode.selectedSegmentIndex))]
@@ -222,7 +251,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         guard autoStartPolicy.shouldStart(enabled: automaticSession.isOn,
             configured: true, foreground: visible,
             busy: voice.active || voice.starting) else { return }
-        voice.start(pairing: pairing, sessionMinutes: [10, 30, 60][max(0, min(2, duration.selectedSegmentIndex))])
+        voice.start(pairing: pairing, sessionMinutes: 60)
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) { revealEditor() }

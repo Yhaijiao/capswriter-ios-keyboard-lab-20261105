@@ -37,4 +37,12 @@ final class VoiceInsertionTests: XCTestCase {
         XCTAssertNil(undo.deletions(documentID: field, textBeforeCursor: ""))
         XCTAssertNil(undo.deletions(documentID: field, textBeforeCursor: nil))
     }
+
+    func testRenewURLCarriesOnlyASafeReturnTarget() {
+        let url = VoiceSessionRenewal.url(returningTo: "com.tencent.xin")
+        XCTAssertEqual(url.host, "renew")
+        XCTAssertEqual(VoiceSessionRenewal.returnBundleID(from: url), "com.tencent.xin")
+        XCTAssertNil(VoiceSessionRenewal.returnBundleID(from: VoiceSessionRenewal.url(returningTo: nil)))
+        XCTAssertNil(VoiceSessionRenewal.returnBundleID(from: URL(string: "capswriterlab://renew?return=a%20b")!))
+    }
 }
