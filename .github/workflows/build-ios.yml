@@ -1,6 +1,11 @@
 name: Build iPhone keyboard for sideloading
 on:
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: 只发布：填一次已通过的构建编号，把它的安装包发到 SideStore 固定下载地址（不重新编译）
+        required: false
+        default: ''
   push:
     branches: [main]
 permissions:
@@ -9,7 +14,39 @@ concurrency:
   group: capswriter-ios-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Same as 发布实验包.ps1: put a passed build's IPA on the fixed
+  # lab-phone-asr release that Lab's "用 SideStore 安装更新" downloads.
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.publish_run_id }}
+    steps:
+      - name: Check the build passed
+        run: |
+          case "$RUN_ID" in (*[!0-9]*|'') echo "构建编号只能是数字"; exit 1;; esac
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,headBranch,headSha,workflowName \
+            --jq '"\(.workflowName) · \(.headBranch) · \(.headSha[0:7]) · \(.conclusion)"'
+          test "$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)" = success
+      - name: Download and verify the IPA
+        run: |
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name CapsWriterLab-IPA --dir ipa
+          cd ipa
+          IPA=$(ls CapsWriterLab-*-sideload.ipa | head -n 1)
+          test -n "$IPA"
+          sha256sum -c SHA256SUMS.txt
+          echo "安装包：$IPA"
+          cp "$IPA" "$RUNNER_TEMP/CapsWriterLab-sideload.ipa"
+      - name: Upload to the fixed SideStore download
+        run: gh release upload lab-phone-asr "$RUNNER_TEMP/CapsWriterLab-sideload.ipa" --repo "$GITHUB_REPOSITORY" --clobber
+
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.publish_run_id == ''
     runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
