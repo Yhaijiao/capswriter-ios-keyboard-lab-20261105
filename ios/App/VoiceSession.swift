@@ -34,6 +34,9 @@ final class VoiceSession {
     private var preparationTask: Task<Void, Never>?
     private var finalizationTask: Task<Void, Never>?
     private var finishTimeout: Task<Void, Never>?
+    private var binaryAudio = false
+    /// The service keeps a job this long without a heartbeat (bridge HEARTBEAT_GRACE).
+    private static let heartbeatGrace: TimeInterval = 20
 
     init() {
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted),
@@ -65,6 +68,7 @@ final class VoiceSession {
                     self.onStatus?("请启动配对的 CapsWriter 识别服务后重试。")
                     return
                 }
+                self.binaryAudio = reply.audio_s16_v1 == true
                 guard (reply.max_seconds ?? 60) >= Lab.maxRecordingSeconds else {
                     self.starting = false
                     self.onStatus?("配对服务版本过旧，请更新后再录制长语音。")
@@ -183,10 +187,17 @@ final class VoiceSession {
 
     private func poll() {
         guard active else { return }
-        if Date() > expires { stop(message: "\(sessionMinutes) 分钟语音会话已结束，麦克风已关闭。"); return }
-        lock.lock(); let framesAge = Date().timeIntervalSince(lastFrames); lock.unlock()
+        lock.lock(); let framesAge = Date().timeIntervalSince(lastFrames); let recording = segmentID != nil; lock.unlock()
+        // The session timer counts from when Lab switched voice on. Never let it
+        // cut a segment that is still recording, preparing or uploading.
+        let segmentInFlight = recording || uploading || preparingID != nil
+        if Date() > expires && !segmentInFlight { stop(message: "\(sessionMinutes) 分钟语音会话已结束，麦克风已关闭。"); return }
         if !audio.isRunning || framesAge > 5 { stop(message: "麦克风已中断，请重新开启语音会话。"); return }
-        if Date().timeIntervalSince(lastSuccess) > 8 { stop(message: "识别服务连接已断开，麦克风已关闭。"); return }
+        // A whole-segment upload can hold up heartbeats on cellular; the upload
+        // request itself reports success or failure.
+        if !uploading && Date().timeIntervalSince(lastSuccess) > Self.heartbeatGrace {
+            stop(message: "识别服务连接已断开，麦克风已关闭。"); return
+        }
         guard !polling else { return }
         polling = true; let current = generation
         BridgeClient.call(pairing: pairing, path: "/v1/voice/agent",
@@ -205,6 +216,8 @@ final class VoiceSession {
     private func handle(_ reply: BridgeReply) {
         guard !uploading else { return }
         if reply.state == "pending", let id = reply.id, completingID != id {
+            // After the session timer runs out, finish the current segment only.
+            guard Date() <= expires else { return }
             if recognitionMode == "cloud" { beginSegment(id) }
             else {
                 guard preparingID != id else { return }
@@ -280,22 +293,78 @@ final class VoiceSession {
             stop(message: "手机识别会话已失效，请重新录音或切回 AWS 云端。"); return
         }
         onStatus?("正在将录音提交给配对的识别服务…")
-        submitSegment(id, path: "/v1/voice/audio", content: ["encoding": "f32le", "sample_rate": 16000, "audio": pcm.base64EncodedString()], generation: current)
+        if binaryAudio {
+            submitAudio(id, pcm: Self.int16PCM(pcm), generation: current)
+        } else {
+            submitSegment(id, path: "/v1/voice/audio", content: ["encoding": "f32le", "sample_rate": 16000, "audio": pcm.base64EncodedString()], generation: current)
+        }
     }
 
-    private func submitSegment(_ id: String, path: String, content: [String: Any], generation current: UUID) {
+    /// 16-bit little-endian PCM: half the size of float32, and sent as a raw
+    /// body instead of base64 (5 minutes ≈ 9.6 MB instead of 25.6 MB).
+    static func int16PCM(_ float32: Data) -> Data {
+        let count = float32.count / 4
+        var output = Data(count: count * 2)
+        float32.withUnsafeBytes { source in
+            output.withUnsafeMutableBytes { target in
+                for index in 0..<count {
+                    let sample = source.loadUnaligned(fromByteOffset: index * 4, as: Float.self)
+                    let clamped = sample.isFinite ? max(-1, min(1, sample)) : 0
+                    target.storeBytes(of: Int16(clamped * 32767).littleEndian, toByteOffset: index * 2, as: Int16.self)
+                }
+            }
+        }
+        return output
+    }
+
+    private func submitAudio(_ id: String, pcm: Data, generation current: UUID, attempt: Int = 1) {
+        let query = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "agent_id", value: agentID),
+                     URLQueryItem(name: "encoding", value: "s16le"), URLQueryItem(name: "sample_rate", value: "16000")]
+        BridgeClient.upload(pairing: pairing, path: "/v1/voice/audio", query: query, body: pcm) { [weak self] result in
+            self?.submitted(id, result: result, generation: current, attempt: attempt) {
+                self?.submitAudio(id, pcm: pcm, generation: current, attempt: attempt + 1)
+            }
+        }
+    }
+
+    private func submitSegment(_ id: String, path: String, content: [String: Any], generation current: UUID, attempt: Int = 1) {
         var value = content; value["id"] = id; value["agent_id"] = agentID
         BridgeClient.call(pairing: pairing, path: path,
                           value: value,
                           timeout: 190) { [weak self] result in
-            guard let self = self, self.generation == current else { return }
-            self.finishTimeout?.cancel(); self.finishTimeout = nil
-            self.uploading = false
-            switch result {
-            case .success(let reply):
-                self.onStatus?(reply.state == "done" ? "识别完成，键盘会自动输入文字。\n语音会话仍开启，可继续录下一段。" : (reply.error ?? "录音已结束。"))
-            case .failure(let error): self.stop(message: "提交失败：\(error.localizedDescription)")
+            self?.submitted(id, result: result, generation: current, attempt: attempt) {
+                self?.submitSegment(id, path: path, content: content, generation: current, attempt: attempt + 1)
             }
+        }
+    }
+
+    private func submitted(_ id: String, result: Result<BridgeReply, Error>, generation current: UUID,
+                           attempt: Int, retry: @escaping () -> Void) {
+        guard generation == current else { return }
+        if case .failure(let error) = result, BridgeError.isTransient(error), attempt < 3 {
+            // A cellular drop mid-upload: the service puts the job back to
+            // stopping, so the same segment can be sent again.
+            onStatus?("网络不稳，正在重新提交录音（第 \(attempt + 1) 次）…")
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(attempt) * 2) { [weak self] in
+                guard let self = self, self.generation == current, self.active else { return }
+                retry()
+            }
+            return
+        }
+        finishTimeout?.cancel(); finishTimeout = nil
+        uploading = false
+        switch result {
+        case .success(let reply):
+            lastSuccess = Date()
+            onStatus?(reply.state == "done" ? "识别完成，键盘会自动输入文字。\n语音会话仍开启，可继续录下一段。" : (reply.error ?? "录音已结束。"))
+        case .failure(let error):
+            // Keep the session; only this segment is lost. Release the job so
+            // the keyboard shows the failure instead of waiting for a result.
+            if BridgeError.isTransient(error) {
+                BridgeClient.call(pairing: pairing, path: "/v1/voice/cancel", value: ["id": id]) { _ in }
+            }
+            lastSuccess = Date()
+            onStatus?("这段录音提交失败：\(error.localizedDescription)\n语音会话仍开启，可重新录音。")
         }
     }
 

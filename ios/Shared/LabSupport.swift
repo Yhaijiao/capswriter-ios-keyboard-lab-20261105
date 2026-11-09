@@ -57,6 +57,7 @@ struct BridgeReply: Decodable {
     var asr_ready: Bool?
     var phone_asr_v1: Bool?
     var max_seconds: Int?
+    var audio_s16_v1: Bool?
 }
 
 enum BridgeError: LocalizedError {
@@ -69,6 +70,14 @@ enum BridgeError: LocalizedError {
         case .invalidReply: return "识别服务的响应格式不正确"
         case .message(let text): return text
         }
+    }
+
+    /// Network drops, timeouts and proxy/gateway 5xx pages are worth retrying.
+    /// A JSON error message is the service's definitive answer.
+    static func isTransient(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        if case BridgeError.server(let code) = error { return code >= 500 }
+        return (error as NSError).domain == NSURLErrorDomain
     }
 }
 
@@ -124,6 +133,35 @@ final class BridgeClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try? JSONSerialization.data(withJSONObject: value)
         }
+        return send(request, completion: completion)
+    }
+
+    /// Raw binary POST (voice audio). Metadata travels in the query so the
+    /// service can accept the job before the body has finished uploading.
+    @discardableResult
+    static func upload(pairing: BridgePairing?, path: String, query: [URLQueryItem], body: Data,
+                       timeout: TimeInterval = 190,
+                       completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask? {
+        guard let pairing, let endpoint = BridgeEndpoint(address: pairing.address),
+              let url = endpoint.requestURL(path: path, query: query) else {
+            completion(.failure(BridgeError.invalidAddress)); return nil
+        }
+        guard !pairing.isExpired() else {
+            completion(.failure(BridgeError.message("试验服务器配置已到期，请更新配对配置。"))); return nil
+        }
+        guard isValidToken(pairing.token) else {
+            completion(.failure(BridgeError.invalidToken)); return nil
+        }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("Bearer \(pairing.token)", forHTTPHeaderField: "Authorization")
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return send(request, completion: completion)
+    }
+
+    private static func send(_ request: URLRequest,
+                             completion: @escaping (Result<BridgeReply, Error>) -> Void) -> URLSessionDataTask {
         let task = session.dataTask(with: request) { data, response, error in
             let result: Result<BridgeReply, Error>
             if let error = error { result = .failure(error) }
