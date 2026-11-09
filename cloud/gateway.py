@@ -19,6 +19,19 @@ class ValidatedASR(DesktopASR):
     def available(self): return self.ready_file.is_file() and super().available()
 
 
+def with_activity(handler, path):
+    """Record only the time of the last POST (no content) for the idle auto-stop."""
+    path = Path(path)
+
+    class ActivityHandler(handler):
+        def do_POST(self):
+            try: path.touch()
+            except OSError: pass
+            return super().do_POST()
+
+    return ActivityHandler
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--private-root', type=Path, required=True)
@@ -26,6 +39,8 @@ def main():
     parser.add_argument('--ready-file', type=Path, default=Path('/run/capswriter/asr-ready.json'))
     parser.add_argument('--hotwords-state', type=Path, required=True)
     parser.add_argument('--enable-hotword-save', action='store_true')
+    parser.add_argument('--activity-file', type=Path,
+                        help='touched on every POST; idle_stop.sh powers off when it goes stale')
     args = parser.parse_args()
     token = args.token_file.read_text().strip()
     if len(token) < 24: raise SystemExit('Pairing token must contain at least 24 characters')
@@ -34,7 +49,10 @@ def main():
     from hotwords import HotwordStore
     hotwords = HotwordStore(args.private_root, args.hotwords_state,
                            writable=args.enable_hotword_save, validate=engine.validate_hotwords)
-    server = ThreadingHTTPServer(('127.0.0.1', 8765), make_handler(engine, token, relay, hotwords))
+    handler = make_handler(engine, token, relay, hotwords)
+    if args.activity_file:
+        handler = with_activity(handler, args.activity_file)
+    server = ThreadingHTTPServer(('127.0.0.1', 8765), handler)
     server.daemon_threads = True
     try: server.serve_forever(poll_interval=.5)
     finally: server.server_close()

@@ -12,6 +12,8 @@ Group=capswriter
 WorkingDirectory=/srv/capswriter/private/desktop
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=OMP_NUM_THREADS=2
+# Set to 1 on a GPU instance after installing the CUDA libraries.
+Environment=CAPSWRITER_GPU=0
 Environment=LD_LIBRARY_PATH=/srv/capswriter/private/desktop/core/server/engines/llama/bin
 RuntimeDirectory=capswriter
 RuntimeDirectoryMode=0750

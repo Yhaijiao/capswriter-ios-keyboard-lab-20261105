@@ -39,7 +39,10 @@ def configure(private_root):
                          ('llm_decode', 'qwen3_asr_llm.gguf')]:
         setattr(config.ModelPaths, 'qwen3_asr_gguf_' + suffix, model_root / name)
     config.Qwen3ASRGGUFArgs.model_dir = str(model_root)
-    config.Qwen3ASRGGUFArgs.onnx_provider = 'CPU'; config.Qwen3ASRGGUFArgs.llm_use_gpu = False
+    # CAPSWRITER_GPU=1 offloads the llama.cpp decoder to the GPU (needs the CUDA
+    # libraries from install_native.py --archive). The ONNX encoder stays on CPU.
+    use_gpu = os.environ.get('CAPSWRITER_GPU', '0') == '1'
+    config.Qwen3ASRGGUFArgs.onnx_provider = 'CPU'; config.Qwen3ASRGGUFArgs.llm_use_gpu = use_gpu
     config.Qwen3ASRGGUFArgs.verbose = False
     threads = int(os.environ.get('CAPSWRITER_LLM_THREADS', '1'))
     if threads not in (1, 2): raise ValueError('Trial supports one or two decoder threads')

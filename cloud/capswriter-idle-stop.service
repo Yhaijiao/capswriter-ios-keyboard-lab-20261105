@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop the instance after CapsWriter has been idle
+
+[Service]
+Type=oneshot
+Environment=CAPSWRITER_IDLE_MINUTES=30
+ExecStart=/srv/capswriter/app/cloud/idle_stop.sh

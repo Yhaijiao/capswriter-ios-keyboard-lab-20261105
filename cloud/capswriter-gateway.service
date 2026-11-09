@@ -9,7 +9,7 @@ User=capswriter
 Group=capswriter
 WorkingDirectory=/srv/capswriter/app
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/srv/capswriter/venv-bridge/bin/python -B /srv/capswriter/app/cloud/gateway.py --private-root /srv/capswriter/private/desktop --token-file /srv/capswriter/private/bridge-token.txt --hotwords-state /srv/capswriter/private/hotword-backups --enable-hotword-save
+ExecStart=/srv/capswriter/venv-bridge/bin/python -B /srv/capswriter/app/cloud/gateway.py --private-root /srv/capswriter/private/desktop --token-file /srv/capswriter/private/bridge-token.txt --hotwords-state /srv/capswriter/private/hotword-backups --enable-hotword-save --activity-file /srv/capswriter/private/state/last-activity
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
