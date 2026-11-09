@@ -28,6 +28,8 @@ jobs:
         run: git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp.git src
       - name: Configure
         run: |
+          # No GPU driver on the runner: link the tools against the CUDA driver stub.
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
           cmake -S src -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
@@ -37,7 +39,9 @@ jobs:
             -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_SERVER=OFF
+            -DLLAMA_BUILD_SERVER=OFF \
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
+            "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath-link,/usr/local/cuda/lib64/stubs"
       - name: Build
         run: cmake --build build -j "$(nproc)"
       - name: Package
