@@ -16,10 +16,10 @@ final class KeyboardSmokeTests: XCTestCase {
         findAndTap(settings.staticTexts["General"].firstMatch, in: settings)
         findAndTap(settings.cells["Keyboard"].firstMatch, in: settings)
         findAndTap(settings.cells["KEYBOARDS"].firstMatch, in: settings)
-        let installed = settings.cells.matching(NSPredicate(format: "label CONTAINS %@", "CapsWriter Lab")).firstMatch
+        let installed = settings.cells.matching(NSPredicate(format: "label CONTAINS %@", "SayKey Lab")).firstMatch
         if !installed.exists {
             findAndTap(settings.cells["AddNewKeyboard"].firstMatch, in: settings)
-            let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CapsWriter Lab")).firstMatch
+            let thirdParty = settings.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "SayKey Lab")).firstMatch
             findAndTap(thirdParty, in: settings)
         }
         settings.terminate()
