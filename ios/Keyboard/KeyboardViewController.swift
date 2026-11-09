@@ -69,6 +69,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// Live draft from the service's streaming model while recording. Shown in
     /// the hint line only; the accurate final text is what gets inserted.
     private var voiceDraft = ""
+    private var draftPlacement = VoiceDraftPlacement.load()
+    /// The draft currently placed in the text field as marked text.
+    private var inlineDraft = InlineVoiceDraft()
     private var voiceTimer: Timer?
     private var voiceBusy = false
     private var voicePolling = false
@@ -104,6 +107,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         removeVoiceIntentControl()
         stopDeleting()
         resumeRequest = nil
+        // Never leave a draft behind in a field the keyboard no longer sees;
+        // a result that finishes meanwhile is inserted on return as usual.
+        clearInlineDraft()
         voiceTimer?.invalidate(); voiceTimer = nil
         if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
         if ["pending", "recording"].contains(voiceState) { cancelVoice() }
@@ -402,6 +408,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         hint.heightAnchor.constraint(equalToConstant: 22).isActive = true
         hint.lineBreakMode = .byTruncatingTail
         hint.textAlignment = .center; content.addArrangedSubview(hint)
+        hint.isUserInteractionEnabled = true
+        hint.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(hintTapped)))
+        hint.accessibilityTraits.insert(.button)
+        hint.accessibilityHint = "切换实时草稿显示位置"
         voiceHint = hint
         let mic = Lab.button("", symbol: "mic.fill") { [weak self] in self?.tapVoice() }
         mic.configuration?.baseBackgroundColor = UIColor(white: 0.94, alpha: 1)
@@ -769,6 +779,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             if ["recording", "stopping", "processing"].contains(voiceState),
                let partial = reply.partial?.trimmingCharacters(in: .whitespacesAndNewlines), !partial.isEmpty {
                 voiceDraft = partial
+                showInlineDraft()
             }
             switch voiceState {
             case "pending": voiceMessage = "正在启动手机录音，请稍候…"
@@ -799,6 +810,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         guard let delivery = voiceDelivery.take(visible: true, documentID: documentID) else { return }
         let pairing = voicePairing
+        clearInlineDraft()
         commitComposition()
         let inserted = autoNewline.apply(to: delivery.text)
         textDocumentProxy.insertText(inserted)
@@ -807,7 +819,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         BridgeClient.call(pairing: pairing, path: "/v1/voice/consume", value: ["id": delivery.id]) { _ in }
     }
     private func updateVoice() {
-        let showDraft = !voiceDraft.isEmpty && ["recording", "stopping", "processing"].contains(voiceState)
+        let showDraft = draftPlacement == .hint && !voiceDraft.isEmpty
+            && ["recording", "stopping", "processing"].contains(voiceState)
         voiceHint?.text = showDraft ? voiceDraft : voiceMessage
         // A draft keeps its newest words in view; status messages keep their start.
         voiceHint?.lineBreakMode = showDraft ? .byTruncatingHead : .byTruncatingTail
@@ -846,10 +859,36 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         for _ in 0..<count { proxy.deleteBackward() }
         voiceUndo.clear(); voiceMessage = "已撤回上一段语音"; updateVoice()
     }
+    /// Put the newest draft into the text field as marked text: underlined,
+    /// cursor after it, and replaced as a whole by the next draft or the result.
+    private func showInlineDraft() {
+        guard draftPlacement == .inline, appeared, hotEditor == nil, composition.isEmpty else { return }
+        let proxy = textDocumentProxy
+        applyInlineDraft(inlineDraft.update(draft: voiceDraft, documentID: proxy.documentIdentifier,
+                                            expectedDocument: voiceDelivery.documentID))
+    }
+    private func clearInlineDraft() { applyInlineDraft(inlineDraft.clear()) }
+    private func applyInlineDraft(_ action: InlineVoiceDraft.Action) {
+        let proxy = textDocumentProxy
+        switch action {
+        case .none: break
+        case .mark(let text):
+            proxy.setMarkedText(text, selectedRange: NSRange(location: (text as NSString).length, length: 0))
+        case .clear:
+            proxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+            proxy.unmarkText()
+        }
+    }
+    @objc private func hintTapped() { toggleDraftPlacement() }
+    private func toggleDraftPlacement() {
+        guard voiceID == nil, voiceState == "idle", !voiceBusy else { return }
+        draftPlacement = draftPlacement.next; draftPlacement.save()
+        voiceMessage = draftPlacement.hint; updateVoice()
+    }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
         voiceID = nil; voicePairing = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
-        voiceDraft = ""
+        voiceDraft = ""; clearInlineDraft()
         voiceRevision = UUID(); voicePolling = false; voiceFailureSince = nil
         voiceMessage = message; updateVoice()
         refreshVoiceReadiness()
@@ -964,6 +1003,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func deleteCharacter() {
         guard !hotSaving else { return }
+        clearInlineDraft()
         spaceCommittedComposition = false
         if composition.isEmpty {
             if let editor = hotEditor {
@@ -1165,6 +1205,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
 
     private func insertText(_ text: String) {
         guard !hotSaving else { return }
+        clearInlineDraft()
         clearVoiceUndo()
         guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
         let length = (editor.text as NSString).length
