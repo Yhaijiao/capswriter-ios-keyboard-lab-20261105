@@ -1,0 +1,61 @@
+name: llama.cpp CUDA (T4) build
+
+# Builds the same pinned llama.cpp release the CPU path uses (b10621) with
+# CUDA for the AWS g4dn T4 (compute capability 7.5). Upstream publishes no
+# Linux CUDA archive for this tag, so we build it once here and attach the
+# shared libraries plus a SHA-256 as an Actions artifact.
+on:
+  push:
+    paths: ['.github/workflows/llama-cuda.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container: nvidia/cuda:12.6.3-devel-ubuntu24.04
+    env:
+      LLAMA_TAG: b10621
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git cmake ninja-build ca-certificates
+      - name: Fetch llama.cpp
+        run: git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp.git src
+      - name: Configure
+        run: |
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=75 \
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+      - name: Package
+        run: |
+          mkdir -p out/llama-$LLAMA_TAG-cuda12.6-sm75
+          find build -name '*.so*' -exec cp -P {} out/llama-$LLAMA_TAG-cuda12.6-sm75/ \;
+          ls -la out/llama-$LLAMA_TAG-cuda12.6-sm75
+          for lib in libllama.so libggml.so libggml-base.so libggml-cuda.so; do
+            test -e out/llama-$LLAMA_TAG-cuda12.6-sm75/$lib || { echo "missing $lib"; exit 1; }
+          done
+          tar -C out -czf llama-$LLAMA_TAG-cuda12.6-sm75.tar.gz llama-$LLAMA_TAG-cuda12.6-sm75
+          sha256sum llama-$LLAMA_TAG-cuda12.6-sm75.tar.gz | tee llama-$LLAMA_TAG-cuda12.6-sm75.tar.gz.sha256
+          (cd src && git rev-parse HEAD) > llama-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-b10621-cuda12.6-sm75
+          path: |
+            llama-*.tar.gz
+            llama-*.sha256
+            llama-commit.txt
+          retention-days: 90
