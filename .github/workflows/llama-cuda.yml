@@ -44,6 +44,10 @@ jobs:
         run: |
           mkdir -p out/llama-$LLAMA_TAG-cuda12.6-sm75
           find build -name '*.so*' -exec cp -P {} out/llama-$LLAMA_TAG-cuda12.6-sm75/ \;
+          # Bundle the CUDA 12 runtime libs so the AMI's own CUDA version does not matter.
+          for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
+            cp -L /usr/local/cuda/lib64/$lib out/llama-$LLAMA_TAG-cuda12.6-sm75/
+          done
           ls -la out/llama-$LLAMA_TAG-cuda12.6-sm75
           for lib in libllama.so libggml.so libggml-base.so libggml-cuda.so; do
             test -e out/llama-$LLAMA_TAG-cuda12.6-sm75/$lib || { echo "missing $lib"; exit 1; }
