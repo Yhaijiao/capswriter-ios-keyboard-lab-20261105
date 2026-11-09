@@ -24,4 +24,17 @@ final class HotwordAppendTests: XCTestCase {
     func testCountsEntriesWithoutComments() {
         XCTAssertEqual(HotwordAppend.entryCount("# a\n\n张三\n李四 | 理事\n"), 2)
     }
+
+    func testRulesAreWrittenInCapsWriterFormat() {
+        let result = HotwordAppend.merge(base: "毫安时 = mAh\n", draft: "赛基=SayKey\n 豆包 ＝ Doubao \n没有等号\n毫安时=mAh", fileID: "rule")
+        XCTAssertEqual(result.text, "毫安时 = mAh\n赛基 = SayKey\n豆包 = Doubao\n")
+        XCTAssertEqual(result.invalid, ["没有等号"])
+        XCTAssertEqual(result.skipped, ["毫安时 = mAh"])
+    }
+
+    func testAliasesNeedAMisrecognition() {
+        let result = HotwordAppend.merge(base: "", draft: "SayKey｜赛奇|赛基\nClaude", fileID: "aliases")
+        XCTAssertEqual(result.text, "SayKey | 赛奇 | 赛基\n")
+        XCTAssertEqual(result.invalid, ["Claude"])
+    }
 }

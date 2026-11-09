@@ -1281,7 +1281,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         editor.selectedRange = NSRange(location: editor.text.utf16.count, length: 0)
         editor.accessibilityIdentifier = "hotword-editor-text"
         hotEditor = editor
-        let title = Lab.label(appendOnly ? "输入新热词，一行一个，点「插入」" : file.name, size: 12, color: Lab.muted); title.numberOfLines = 2
+        let title = Lab.label(appendOnly ? HotwordAppend.hint(fileID: file.id) : file.name, size: 12, color: Lab.muted); title.numberOfLines = 2
         title.accessibilityIdentifier = "hotword-editor-status"; hotEditorStatus = title
         let cancel = editorAction("取消") { [weak self] in self?.closeHotwordEditor(saved: false) }
         cancel.accessibilityIdentifier = "hotword-editor-cancel"; hotCancelButton = cancel
@@ -1295,6 +1295,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         add.accessibilityIdentifier = "hotword-add-line"; hotAddButton = add
         add.accessibilityHint = "点按添加一行，按住插入误识别分隔符或排除标记"
         add.menu = UIMenu(children: [
+            UIAction(title: "插入替换符 =（替换规则用）") { [weak self] _ in self?.commitComposition(); self?.insertText(" = ") },
             UIAction(title: "插入误识别分隔符 |") { [weak self] _ in self?.commitComposition(); self?.insertText(" | ") },
             UIAction(title: "插入排除标记 ~~~") { [weak self] _ in self?.commitComposition(); self?.insertText("~~~") },
             UIAction(title: "插入注释 #") { [weak self] _ in self?.commitComposition(); self?.insertText("#") }
@@ -1329,9 +1330,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         var text = editor.text ?? ""
         var added: [String] = []
         if let base = hotAppendBase {
-            let merged = HotwordAppend.merge(base: base, draft: text)
+            let merged = HotwordAppend.merge(base: base, draft: text, fileID: hotFileID)
+            guard merged.invalid.isEmpty else {
+                hotEditorStatus?.text = "格式不对：" + merged.invalid.joined(separator: "、") + "。" + HotwordAppend.hint(fileID: hotFileID); return
+            }
             guard !merged.added.isEmpty else {
-                hotEditorStatus?.text = merged.skipped.isEmpty ? "请先输入要插入的热词。" : "这些词已经在词库里了。"; return
+                hotEditorStatus?.text = merged.skipped.isEmpty ? "请先输入要插入的内容。" : "这些已经在词库里了。"; return
             }
             text = merged.text; added = merged.added
         }
@@ -1343,7 +1347,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             switch result {
             case .success:
                 self.closeHotwordEditor(saved: true)
-                if !added.isEmpty { self.voiceMessage = "已插入热词：" + added.joined(separator: "、"); self.updateVoice() }
+                if !added.isEmpty { self.voiceMessage = "已插入：" + added.joined(separator: "、"); self.updateVoice() }
             case .failure(let error):
                 // Retain the entire draft, cursor and original revision. A 409
                 // must never silently overwrite an edit made on the computer.
