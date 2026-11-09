@@ -7,10 +7,12 @@ final class HotwordManagerView: UIView {
     var onSettings: (() -> Void)?
     var onReload: (() -> Void)?
     var onEdit: ((HotwordFile) -> Void)?
+    var onInsert: ((HotwordFile) -> Void)?
     private let picker = Lab.button("正在读取词库…", symbol: "chevron.down") {}
     private let note = Lab.label("", size: 12, color: Lab.muted)
     private let text = UITextView()
     private let edit = Lab.button("编辑 hot.txt", symbol: "square.and.pencil") {}
+    private let insert = Lab.button("插入热词", symbol: "plus.circle.fill") {}
     private var files: [HotwordFile] = []
     private var selectedID = "hot"
 
@@ -56,7 +58,21 @@ final class HotwordManagerView: UIView {
         text.layer.cornerRadius = 10
         text.textContainerInset = UIEdgeInsets(top: 8, left: 7, bottom: 8, right: 7)
         text.accessibilityIdentifier = "hotword-file-content"
+        // The whole list is long and not useful on a phone; adding words is.
+        text.isHidden = true
         stack.addArrangedSubview(text)
+        insert.configuration?.baseBackgroundColor = .systemBlue
+        insert.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = .boldSystemFont(ofSize: 17); return output
+        }
+        insert.addAction(UIAction { [weak self] _ in
+            guard let self = self, let file = self.files.first(where: { $0.id == self.selectedID }), file.writable else { return }
+            self.onInsert?(file)
+        }, for: .touchUpInside)
+        insert.isEnabled = false; insert.accessibilityIdentifier = "hotword-insert"
+        insert.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        stack.addArrangedSubview(insert)
+        stack.addArrangedSubview(UIView())
         let reload = compactButton("重新加载", symbol: "arrow.clockwise") { [weak self] in self?.onReload?() }
         reload.accessibilityIdentifier = "hotword-manager-reload"
         edit.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6)
@@ -88,23 +104,26 @@ final class HotwordManagerView: UIView {
             showError("服务未返回热词文件，请升级电脑桥接后重试。"); return
         }
         picker.configuration?.title = file.name
-        text.text = file.text; text.setContentOffset(.zero, animated: false)
+        text.text = file.text; text.setContentOffset(.zero, animated: false); text.isHidden = true
         edit.isEnabled = file.writable
-        edit.configuration?.title = file.writable ? "编辑 " + file.name : "当前文件只读"
-        let readOnly = file.id == "hot" ? "电脑端尚未启用手机写回，当前可查看词库。" : "此文件只读。个人词条可在 hot.txt 中添加。"
-        note.text = message ?? (file.writable ? "每行一个词，或：正确词 | 误识别。\n保存后更新电脑热词，下次识别生效。" : readOnly)
+        edit.configuration?.title = file.writable ? "编辑整个文件" : "当前文件只读"
+        insert.isEnabled = file.writable
+        insert.configuration?.title = file.writable ? "插入热词到 " + file.name : "当前文件只读，不能插入"
+        let readOnly = file.id == "hot" ? "电脑端还没打开手机写回：在电脑上先双击「停止语音桥接」，再双击「后台启动语音桥接」。" : "此文件只读。个人词条可在 hot.txt 中添加。"
+        let count = "共 \(HotwordAppend.entryCount(file.text)) 条。"
+        note.text = message ?? (file.writable ? count + "点下方按钮输入新热词，插入后下次识别生效。" : readOnly)
     }
 
     func showLoading() {
-        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false
+        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false; insert.isEnabled = false
         picker.configuration?.title = "正在读取词库…"
         text.text = ""; note.text = "正在连接已配对的识别服务…"
     }
 
     func showError(_ message: String) {
-        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false
+        files = []; picker.menu = nil; picker.isEnabled = false; edit.isEnabled = false; insert.isEnabled = false
         picker.configuration?.title = "读取失败"
-        text.text = message
+        text.text = message; text.isHidden = false
         note.text = "检查右上角连接设置，或点击重新加载。"
     }
 

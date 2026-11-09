@@ -48,6 +48,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private weak var hotEditorBar: UIStackView?
     private var hotRevision = ""
     private var hotFileID = "hot"
+    /// File text the phone's new words are appended to; nil when editing the whole file.
+    private var hotAppendBase: String?
     private var hotPairing: BridgePairing?
     private var hotRequest = UUID()
     private weak var hotManager: HotwordManagerView?
@@ -271,7 +273,21 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             self?.changeMode(Mode(rawValue: selector?.selectedSegmentIndex ?? 0) ?? .voice)
         }, for: .valueChanged)
         selector.widthAnchor.constraint(equalToConstant: 142).isActive = true
-        let header = row([brand, UIView(), selector], equal: false); header.alignment = .center
+        // Small and only shown when there is something to undo, so it never
+        // looks like the auto-newline key on the voice page.
+        var undoConfig = UIButton.Configuration.tinted()
+        undoConfig.title = "撤回"; undoConfig.image = UIImage(systemName: "arrow.uturn.backward")
+        undoConfig.imagePadding = 3; undoConfig.cornerStyle = .capsule; undoConfig.baseForegroundColor = .systemOrange
+        undoConfig.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        undoConfig.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8)
+        undoConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { input in
+            var output = input; output.font = .systemFont(ofSize: 13, weight: .semibold); return output
+        }
+        let undo = UIButton(configuration: undoConfig, primaryAction: UIAction { [weak self] _ in self?.undoVoiceInsert() })
+        undo.accessibilityIdentifier = "keyboard-voice-undo"
+        undo.accessibilityLabel = "撤回上一段语音"
+        undo.isHidden = true; undoButton = undo
+        let header = row([brand, undo, UIView(), selector], equal: false); header.alignment = .center
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 32)
         headerHeight.priority = .defaultHigh; headerHeight.isActive = true
         normalHeader = header
@@ -405,11 +421,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         hotwords.translatesAutoresizingMaskIntoConstraints = false; right.addSubview(hotwords)
         let newline = key("", symbol: "arrow.turn.down.left") { [weak self] in self?.toggleAutoNewline() }
         newline.accessibilityIdentifier = "keyboard-auto-newline"
-        let undo = key("", symbol: "arrow.uturn.backward") { [weak self] in self?.undoVoiceInsert() }
-        undo.accessibilityIdentifier = "keyboard-voice-undo"
-        undo.accessibilityLabel = "撤回上一段语音"
-        newlineButton = newline; undoButton = undo
-        let leftKeys = UIStackView(arrangedSubviews: [newline, undo]); leftKeys.spacing = 5
+        newlineButton = newline
+        let leftKeys = UIStackView(arrangedSubviews: [newline]); leftKeys.spacing = 5
         leftKeys.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(leftKeys)
         let lastRow = row([left, enter, right], equal: false)
         NSLayoutConstraint.activate([
@@ -418,7 +431,6 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             leftKeys.centerYAnchor.constraint(equalTo: left.centerYAnchor),
             leftKeys.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor),
             newline.widthAnchor.constraint(equalToConstant: 44),
-            undo.widthAnchor.constraint(equalToConstant: 44),
             hotwords.trailingAnchor.constraint(equalTo: right.trailingAnchor),
             hotwords.centerYAnchor.constraint(equalTo: right.centerYAnchor),
             hotwords.widthAnchor.constraint(equalToConstant: 44)
@@ -494,7 +506,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func renewSessionInLab() {
         let defaults = UserDefaults.standard
         defaults.set(Date().timeIntervalSince1970, forKey: VoiceSessionRenewal.pendingKey)
-        if openContainingApp(VoiceSessionRenewal.url) {
+        if openContainingApp(VoiceSessionRenewal.url(returningTo: hostBundleID)) {
             voiceMessage = "语音会话已结束，正在打开 Lab 续上…"
         } else {
             defaults.removeObject(forKey: VoiceSessionRenewal.pendingKey)
@@ -517,6 +529,15 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             responder = current.next
         }
         return false
+    }
+    /// The host app's bundle ID, when iOS still reports it, so Lab can send
+    /// the user straight back. Newer iOS versions usually hide it.
+    private var hostBundleID: String? {
+        let key = "_hostBundleID"
+        guard let parent = parent, parent.responds(to: NSSelectorFromString(key)),
+              let id = parent.value(forKey: key) as? String,
+              !id.isEmpty, id != "<null>", !id.hasPrefix("org.capswriterlab") else { return nil }
+        return id
     }
     private var canOpenContainingApp: Bool {
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
@@ -616,7 +637,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func updateVoiceIntentControl() {
         let showIntent = canUseVoiceIntent && voiceID == nil && voiceState == "idle"
-            && (voiceAgentReady != true || intentWarmupID != nil) && !canOpenContainingApp
+            && (voiceAgentReady != true || intentWarmupID != nil)
         guard showIntent, let container = voiceContainer else { removeVoiceIntentControl(); return }
         if #available(iOS 18.0, *) {
             let control = KeyboardVoiceIntentControl(isEnabled: !voiceBusy) { [weak self] in self?.beginIntentWarmup() }
@@ -652,7 +673,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let request = UUID(); intentWarmupID = request
         intentWarmupDocumentID = textDocumentProxy.documentIdentifier
         voiceBusy = true; voiceMessage = "正在尝试后台开启语音…"; updateVoice()
-        pollIntentWarmup(request, deadline: Date().addingTimeInterval(20))
+        // Background start keeps the user in place. If it doesn't come up
+        // quickly, fall back to the round trip through Lab.
+        pollIntentWarmup(request, deadline: Date().addingTimeInterval(canOpenContainingApp ? 8 : 20))
+    }
+    private func intentWarmupTimedOut() {
+        guard canOpenContainingApp else { failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return }
+        cancelIntentWarmup(); renewSessionInLab()
     }
     private func failIntentWarmup(_ message: String) {
         cancelIntentWarmup(); voiceAgentReady = false
@@ -667,7 +694,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else {
-            failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return
+            intentWarmupTimedOut(); return
         }
         BridgeClient.call(pairing: bridgePairing,
                           path: "/v1/status", timeout: min(2.5, max(0.25, remaining))) { [weak self] result in
@@ -677,7 +704,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                 self.failIntentWarmup("输入框已改变，点击麦克风重试。"); return
             }
             guard Date() < deadline else {
-                self.failIntentWarmup("后台启动未成功，请在 Lab 检查权限和配对后重试。"); return
+                self.intentWarmupTimedOut(); return
             }
             if case .success(let reply) = result, reply.agent_ready == true {
                 self.cancelIntentWarmup(); self.voiceAgentReady = true; self.updateVoice()
@@ -776,7 +803,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func updateVoiceEditKeys() {
         let idle = voiceID == nil && voiceState == "idle"
-        undoButton?.isEnabled = idle && voiceUndo.isAvailable
+        undoButton?.isHidden = !(idle && voiceUndo.isAvailable)
         guard let newline = newlineButton else { return }
         let on = autoNewline != .off
         newline.configuration?.baseBackgroundColor = autoNewline == .hard ? UIColor.systemOrange : (on ? UIColor.systemBlue : Lab.surface)
@@ -1154,6 +1181,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         manager.onEdit = { [weak self, weak manager] file in
             manager?.removeFromSuperview(); self?.showHotwordEditor(file)
         }
+        manager.onInsert = { [weak self, weak manager] file in
+            manager?.removeFromSuperview(); self?.showHotwordEditor(file, appendOnly: true)
+        }
         loadHotwords(into: manager)
     }
     private func loadHotwords(into manager: HotwordManagerView) {
@@ -1168,12 +1198,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
     }
     // Internal presentation entry point also exercised by the UIKit regression.
-    func showHotwordEditor(_ file: HotwordFile) {
+    func showHotwordEditor(_ file: HotwordFile, appendOnly: Bool = false) {
         guard file.writable, hotEditor == nil else { return }
         stopDeleting(); commitComposition(); setCandidatesExpanded(false)
         hotRequest = UUID(); hotRevision = file.revision; hotFileID = file.id; hotPairing = bridgePairing
+        hotAppendBase = appendOnly ? file.text : nil
         let editor = UITextView()
-        editor.text = file.text; editor.font = .systemFont(ofSize: 15)
+        editor.text = appendOnly ? "" : file.text; editor.font = .systemFont(ofSize: 15)
         editor.textColor = .white; editor.backgroundColor = Lab.surface; editor.layer.cornerRadius = 9
         editor.autocorrectionType = .no; editor.autocapitalizationType = .none
         editor.spellCheckingType = .no; editor.smartQuotesType = .no; editor.smartDashesType = .no
@@ -1183,10 +1214,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         editor.inputAssistantItem.leadingBarButtonGroups = []; editor.inputAssistantItem.trailingBarButtonGroups = []
         editor.textContainerInset = UIEdgeInsets(top: 7, left: 6, bottom: 7, right: 6)
         editor.heightAnchor.constraint(equalToConstant: 96).isActive = true
-        editor.selectedRange = NSRange(location: file.text.utf16.count, length: 0)
+        editor.selectedRange = NSRange(location: editor.text.utf16.count, length: 0)
         editor.accessibilityIdentifier = "hotword-editor-text"
         hotEditor = editor
-        let title = Lab.label(file.name, size: 12, color: Lab.muted); title.numberOfLines = 2
+        let title = Lab.label(appendOnly ? "输入新热词，一行一个，点「插入」" : file.name, size: 12, color: Lab.muted); title.numberOfLines = 2
         title.accessibilityIdentifier = "hotword-editor-status"; hotEditorStatus = title
         let cancel = editorAction("取消") { [weak self] in self?.closeHotwordEditor(saved: false) }
         cancel.accessibilityIdentifier = "hotword-editor-cancel"; hotCancelButton = cancel
@@ -1204,7 +1235,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             UIAction(title: "插入排除标记 ~~~") { [weak self] _ in self?.commitComposition(); self?.insertText("~~~") },
             UIAction(title: "插入注释 #") { [weak self] _ in self?.commitComposition(); self?.insertText("#") }
         ])
-        let save = editorAction("保存") { [weak self] in self?.saveHotwords() }
+        let save = editorAction(appendOnly ? "插入" : "保存") { [weak self] in self?.saveHotwords() }
         save.accessibilityIdentifier = "hotword-editor-save"; hotSaveButton = save
         for button in [cancel, add, save] { button.widthAnchor.constraint(equalToConstant: 48).isActive = true }
         let bar = row([cancel, add, title, save], equal: false)
@@ -1231,14 +1262,24 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         commitComposition(); stopDeleting()
         hotRequest = UUID(); let request = hotRequest
-        let value: [String: Any] = ["file_id": hotFileID, "revision": hotRevision, "text": editor.text ?? ""]
-        setHotSaving(true); hotEditorStatus?.text = "正在保存…"
+        var text = editor.text ?? ""
+        var added: [String] = []
+        if let base = hotAppendBase {
+            let merged = HotwordAppend.merge(base: base, draft: text)
+            guard !merged.added.isEmpty else {
+                hotEditorStatus?.text = merged.skipped.isEmpty ? "请先输入要插入的热词。" : "这些词已经在词库里了。"; return
+            }
+            text = merged.text; added = merged.added
+        }
+        let value: [String: Any] = ["file_id": hotFileID, "revision": hotRevision, "text": text]
+        setHotSaving(true); hotEditorStatus?.text = added.isEmpty ? "正在保存…" : "正在插入…"
         BridgeClient.call(pairing: hotPairing, path: "/v1/hotwords/save", value: value) { [weak self] result in
             guard let self = self, self.hotRequest == request, self.hotEditor != nil else { return }
             self.setHotSaving(false)
             switch result {
             case .success:
                 self.closeHotwordEditor(saved: true)
+                if !added.isEmpty { self.voiceMessage = "已插入热词：" + added.joined(separator: "、"); self.updateVoice() }
             case .failure(let error):
                 // Retain the entire draft, cursor and original revision. A 409
                 // must never silently overwrite an edit made on the computer.
@@ -1259,7 +1300,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         for item in [hotEditorBar as UIView?, hotEditor as UIView?].compactMap({ $0 }) {
             content.removeArrangedSubview(item); item.removeFromSuperview()
         }
-        hotEditor = nil; hotEditorBar = nil; hotEditorStatus = nil
+        hotEditor = nil; hotEditorBar = nil; hotEditorStatus = nil; hotAppendBase = nil
         modeSelector?.setEnabled(true, forSegmentAt: Mode.voice.rawValue)
         mode = .voice; shifted = false; symbols = false
         if saved { voiceMessage = "热词已保存 · 点击开始录音" }
