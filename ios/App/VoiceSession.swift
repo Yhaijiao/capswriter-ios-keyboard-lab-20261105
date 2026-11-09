@@ -37,6 +37,16 @@ final class VoiceSession {
     private var finalizationTask: Task<Void, Never>?
     private var finishTimeout: Task<Void, Never>?
     private var binaryAudio = false
+    /// Send audio in small pieces while recording, so the service can show a
+    /// live draft and needs no big upload at the end.
+    private var streamAudio = false
+    /// Bytes of int16 audio the service has confirmed for the current segment.
+    private var streamedBytes = 0
+    private var chunkInFlight = false
+    /// Largest live chunk the service accepts (bridge MAX_CHUNK_S16, 10 s).
+    private static let maxChunkBytes = 16000 * 2 * 10
+    /// Server reply when streamed audio has a gap (bridge finish_stream).
+    private static let incompleteStream = "流式录音不完整"
     /// The service keeps a job this long without a heartbeat (bridge HEARTBEAT_GRACE).
     private static let heartbeatGrace: TimeInterval = 20
 
@@ -91,6 +101,7 @@ final class VoiceSession {
                     return
                 }
                 self.binaryAudio = reply.audio_s16_v1 == true
+                self.streamAudio = reply.audio_stream_v1 == true && self.recognitionMode == "cloud"
                 guard (reply.max_seconds ?? 60) >= Lab.maxRecordingSeconds else {
                     self.starting = false
                     self.onStatus?("配对服务版本过旧，请更新后再录制长语音。")
@@ -221,6 +232,7 @@ final class VoiceSession {
         if !uploading && Date().timeIntervalSince(lastSuccess) > Self.heartbeatGrace {
             stop(message: "识别服务连接已断开，麦克风已关闭。"); return
         }
+        sendLiveChunk()
         guard !polling else { return }
         polling = true; let current = generation
         BridgeClient.call(pairing: pairing, path: "/v1/voice/agent",
@@ -279,8 +291,9 @@ final class VoiceSession {
         // out and the keyboard only needs Lab once it has actually lapsed.
         extend(minutes: sessionMinutes)
         lock.lock()
-        if segmentID != id { segmentID = id; samples = Data() }
+        if segmentID != id { segmentID = id; samples = Data(); streamedBytes = 0 }
         lock.unlock()
+        chunkInFlight = false
         BridgeClient.call(pairing: pairing, path: "/v1/voice/ack",
                           value: ["id": id, "agent_id": agentID]) { _ in }
         onStatus?(recognitionMode == "cloud" ? "正在录音 · 单段最长 5 分钟，可在键盘停止。" : "手机正在识别 · 单段最长 5 分钟，可在键盘停止。")
@@ -319,10 +332,80 @@ final class VoiceSession {
             stop(message: "手机识别会话已失效，请重新录音或切回 AWS 云端。"); return
         }
         onStatus?("正在将录音提交给配对的识别服务…")
-        if binaryAudio {
+        if streamAudio {
+            finishStream(id, pcm: pcm, generation: current)
+        } else if binaryAudio {
             submitAudio(id, pcm: Self.int16PCM(pcm), generation: current)
         } else {
             submitSegment(id, path: "/v1/voice/audio", content: ["encoding": "f32le", "sample_rate": 16000, "audio": pcm.base64EncodedString()], generation: current)
+        }
+    }
+
+    /// While recording, send whatever audio the service has not confirmed yet.
+    /// One request at a time; a failed or gapped chunk is simply resent from
+    /// the service's `received` position on the next tick.
+    private func sendLiveChunk() {
+        guard streamAudio, !chunkInFlight, !uploading else { return }
+        lock.lock()
+        guard let id = segmentID else { lock.unlock(); return }
+        let start = streamedBytes * 2
+        let end = min(samples.count, start + Self.maxChunkBytes * 2)
+        // About 0.3 s at a time keeps requests few without lagging the draft.
+        guard end - start >= 16000 * 4 * 3 / 10 else { lock.unlock(); return }
+        let offset = streamedBytes
+        let chunk = Self.int16PCM(samples.subdata(in: start..<end))
+        lock.unlock()
+        chunkInFlight = true; let current = generation
+        let query = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "agent_id", value: agentID),
+                     URLQueryItem(name: "offset", value: String(offset))]
+        BridgeClient.upload(pairing: pairing, path: "/v1/voice/chunk", query: query, body: chunk, timeout: 10) { [weak self] result in
+            guard let self = self, self.generation == current else { return }
+            self.chunkInFlight = false
+            guard case .success(let reply) = result else { return }
+            self.lastSuccess = Date()
+            self.lock.lock()
+            if self.segmentID == id, let received = reply.received, received >= 0 {
+                self.streamedBytes = min(received, self.samples.count / 2)
+            }
+            self.lock.unlock()
+        }
+    }
+
+    /// Send the last unconfirmed audio, then ask the service to recognize what
+    /// it already has. Any gap falls back to the usual whole-segment upload.
+    private func finishStream(_ id: String, pcm: Data, generation current: UUID) {
+        let total = pcm.count / 2
+        let offset = min(streamedBytes, total)
+        let fallback: () -> Void = { [weak self] in
+            self?.submitAudio(id, pcm: Self.int16PCM(pcm), generation: current)
+        }
+        guard total - offset <= Self.maxChunkBytes else { fallback(); return }
+        let finishCall = { [weak self] in
+            guard let self = self, self.generation == current else { return }
+            self.submitStreamFinish(id, total: total, generation: current, fallback: fallback)
+        }
+        guard total > offset else { finishCall(); return }
+        let query = [URLQueryItem(name: "id", value: id), URLQueryItem(name: "agent_id", value: agentID),
+                     URLQueryItem(name: "offset", value: String(offset))]
+        let tail = Self.int16PCM(pcm.subdata(in: offset * 2..<pcm.count))
+        BridgeClient.upload(pairing: pairing, path: "/v1/voice/chunk", query: query, body: tail, timeout: 20) { [weak self] result in
+            guard let self = self, self.generation == current else { return }
+            if case .success(let reply) = result, reply.received == total { finishCall() } else { fallback() }
+        }
+    }
+
+    private func submitStreamFinish(_ id: String, total: Int, generation current: UUID,
+                                    fallback: @escaping () -> Void, attempt: Int = 1) {
+        BridgeClient.call(pairing: pairing, path: "/v1/voice/finish",
+                          value: ["id": id, "agent_id": agentID, "total": total], timeout: 190) { [weak self] result in
+            guard let self = self, self.generation == current else { return }
+            if case .failure(let error) = result, let bridge = error as? BridgeError,
+               case .message(let text) = bridge, text.contains(Self.incompleteStream) {
+                fallback(); return
+            }
+            self.submitted(id, result: result, generation: current, attempt: attempt) {
+                self.submitStreamFinish(id, total: total, generation: current, fallback: fallback, attempt: attempt + 1)
+            }
         }
     }
 
@@ -400,6 +483,7 @@ final class VoiceSession {
         finalizationTask?.cancel(); finalizationTask = nil
         finishTimeout?.cancel(); finishTimeout = nil
         let wasActive = active; active = false; starting = false; polling = false; uploading = false
+        chunkInFlight = false
         pendingMinutes = 0
         audio.stop()
         if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false }

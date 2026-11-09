@@ -58,6 +58,13 @@ struct BridgeReply: Decodable {
     var phone_asr_v1: Bool?
     var max_seconds: Int?
     var audio_s16_v1: Bool?
+    /// The service accepts live chunks while recording (bridge append_chunk).
+    var audio_stream_v1: Bool?
+    var live_preview: Bool?
+    /// Draft text from the streaming model while recording.
+    var partial: String?
+    /// Bytes of int16 audio the service has received for this segment.
+    var received: Int?
 }
 
 enum BridgeError: LocalizedError {
