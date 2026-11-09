@@ -367,7 +367,10 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     }
 
     private func showPairing(_ pairing: BridgePairing?) {
-        address.text = pairing?.address
+        // Nothing saved for the home computer yet: start from its usual address,
+        // so only the pairing token has to be typed.
+        let selected = profiles?.selected ?? .home
+        address.text = pairing?.address ?? (selected == .home ? BridgeTarget.defaultHomeAddress : nil)
         token.text = pairing?.token
     }
 
