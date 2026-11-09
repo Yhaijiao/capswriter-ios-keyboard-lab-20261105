@@ -22,6 +22,16 @@ AGENT_WINDOW = 8
 # Upload time for a whole segment once the phone has started sending it.
 RECEIVE_SECONDS = 200
 ACTIVE_STATES = ('pending', 'recording', 'stopping', 'receiving', 'processing')
+# One live chunk may carry up to 10 s, so the phone can catch up after a blip.
+MAX_CHUNK_S16 = RATE * 2 * 10
+
+
+def s16_to_f32(pcm):
+    samples = array.array('h'); samples.frombytes(pcm)
+    if sys.byteorder != 'little': samples.byteswap()
+    floats = array.array('f', [v / 32768.0 for v in samples])
+    if sys.byteorder != 'little': floats.byteswap()
+    return floats.tobytes()
 
 
 class VoiceError(Exception):
@@ -73,12 +83,17 @@ class DesktopASR:
 
 
 class VoiceRelay:
-    def __init__(self, engine, recognizer, clock=time.monotonic):
+    def __init__(self, engine, recognizer, clock=time.monotonic, preview=None):
         self.engine, self.recognizer, self.clock = engine, recognizer, clock
+        self.preview = preview
         self.lock = threading.RLock()
         self.agent_id = None
         self.heartbeat = -float('inf')
         self.job = None
+        # Audio streamed in during recording (int16), kept only in memory and
+        # only until the job leaves its active states.
+        self.audio = bytearray()
+        self.preview_session = None
 
     def _expire(self):
         if self.job is None:
@@ -94,8 +109,10 @@ class VoiceRelay:
         if lost or too_long or stalled:
             self.job.update(updated=self.clock(), state='error', error='手机语音会话已断开或录音超时，请回主 App 重新开启。', text='')
             self.job.pop('receiving_since', None)
-        if self.job['state'] not in ACTIVE_STATES and now - self.job.get('updated', self.job['created']) > 180:
-            self.job = None
+        if self.job['state'] not in ACTIVE_STATES:
+            self.audio = bytearray(); self.preview_session = None
+            if now - self.job.get('updated', self.job['created']) > 180:
+                self.job = None
 
     def _public(self):
         self._expire()
@@ -120,7 +137,8 @@ class VoiceRelay:
             self._expire()
             return dict(voice_enabled=True, agent_ready=self.clock() - self.heartbeat <= AGENT_WINDOW,
                         asr_ready=self.recognizer.available(), max_seconds=MAX_SECONDS,
-                        phone_asr_v1=True, audio_s16_v1=True)
+                        phone_asr_v1=True, audio_s16_v1=True, audio_stream_v1=True,
+                        live_preview=self.preview is not None)
 
     def agent(self, agent_id, active=True):
         if not isinstance(agent_id, str) or not 16 <= len(agent_id) <= 80:
@@ -151,7 +169,9 @@ class VoiceRelay:
                 raise VoiceError(409, '上一段录音仍在处理，请稍后。')
             self.job = dict(id=secrets.token_hex(16), state='pending', text='',
                             error='', created=self.clock(), updated=self.clock(),
-                            max_seconds=MAX_SECONDS)
+                            max_seconds=MAX_SECONDS, partial='', received=0)
+            self.audio = bytearray()
+            self.preview_session = self.preview.session() if self.preview else None
             return self._public()
 
     def ack(self, job_id, agent_id):
@@ -176,14 +196,14 @@ class VoiceRelay:
     def cancel(self, job_id):
         with self.lock:
             self._job(job_id)
-            self.job.update(updated=self.clock(), state='cancelled', text='', error='已取消')
+            self.job.update(updated=self.clock(), state='cancelled', text='', partial='', error='已取消')
             return self._public()
 
     def consume(self, job_id):
         with self.lock:
             self._job(job_id)
             if self.job['state'] == 'done':
-                self.job.update(updated=self.clock(), state='consumed', text='')
+                self.job.update(updated=self.clock(), state='consumed', text='', partial='')
             return self._public()
 
     def upload(self, value):
@@ -245,11 +265,54 @@ class VoiceRelay:
                 self._set_state('stopping'); self.job.pop('receiving_since', None)
                 raise VoiceError(400, '录音不足 0.2 秒或音频格式无效。')
             self._set_state('processing'); self.job.pop('receiving_since', None)
-        samples = array.array('h'); samples.frombytes(pcm)
-        if sys.byteorder != 'little': samples.byteswap()
-        floats = array.array('f', [v / 32768.0 for v in samples])
-        if sys.byteorder != 'little': floats.byteswap()
-        return self._recognize(job_id, floats.tobytes())
+        return self._recognize(job_id, s16_to_f32(pcm))
+
+    def append_chunk(self, job_id, agent_id, offset, pcm):
+        """Live int16 chunk during recording. `offset` is the byte position of
+        the chunk in the segment, so a resent or overlapping chunk is harmless
+        and a gap is reported back through `received` for the phone to resend."""
+        with self.lock:
+            self._agent(agent_id); self._job(job_id)
+            if self.job['state'] not in ('recording', 'stopping'):
+                raise VoiceError(409, '录音已结束或取消。')
+            if not isinstance(offset, int) or offset < 0 or offset % 2 or len(pcm) % 2 or len(pcm) > MAX_CHUNK_S16:
+                raise VoiceError(400, 'Invalid audio chunk')
+            # A chunk is proof the phone is alive even if heartbeats queue up.
+            self.heartbeat = max(self.heartbeat, self.clock())
+            fresh = b''
+            if offset <= len(self.audio) < offset + len(pcm):
+                fresh = pcm[len(self.audio) - offset:][:MAX_AUDIO_S16 - len(self.audio)]
+                self.audio += fresh
+                self.job['received'] = len(self.audio)
+            session = self.preview_session
+        if fresh and session is not None:
+            try:
+                partial = session.feed(fresh)
+            except Exception:
+                partial = None  # The preview is optional; the final text is unaffected.
+            with self.lock:
+                if (partial is not None and self.preview_session is session and self.job
+                        and self.job['id'] == job_id and self.job['state'] in ('recording', 'stopping')):
+                    self.job['partial'] = partial
+        with self.lock:
+            self._job(job_id)
+            return self._public()
+
+    def finish_stream(self, job_id, agent_id, total):
+        """Recognize the streamed audio without a final upload. If any chunk is
+        missing the job stays as it is and the phone uploads the whole segment."""
+        with self.lock:
+            self._agent(agent_id); self._job(job_id)
+            if self.job['state'] not in ('recording', 'stopping'):
+                raise VoiceError(409, '录音已结束或取消。')
+            if not isinstance(total, int) or total != len(self.audio):
+                raise VoiceError(409, '流式录音不完整，请上传整段录音。')
+            if not RATE * 2 // 5 <= total <= MAX_AUDIO_S16:
+                raise VoiceError(400, '录音不足 0.2 秒或超过 5 分钟。')
+            pcm = bytes(self.audio)
+            self.audio = bytearray(); self.preview_session = None
+            self._set_state('processing')
+        return self._recognize(job_id, s16_to_f32(pcm))
 
     def _set_state(self, state):
         self.job['state'] = state

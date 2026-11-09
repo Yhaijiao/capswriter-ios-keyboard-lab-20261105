@@ -66,6 +66,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var voiceState = "idle"
     private var voiceDelivery = VoiceResultDelivery()
     private var voiceMessage = "Tap to speak"
+    /// Live draft from the service's streaming model while recording. Shown in
+    /// the hint line only; the accurate final text is what gets inserted.
+    private var voiceDraft = ""
     private var voiceTimer: Timer?
     private var voiceBusy = false
     private var voicePolling = false
@@ -763,6 +766,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             cancelVoice(); resetVoice(error.localizedDescription)
         case .success(let reply):
             voiceState = reply.state ?? "idle"
+            if ["recording", "stopping", "processing"].contains(voiceState),
+               let partial = reply.partial?.trimmingCharacters(in: .whitespacesAndNewlines), !partial.isEmpty {
+                voiceDraft = partial
+            }
             switch voiceState {
             case "pending": voiceMessage = "正在启动手机录音，请稍候…"
             case "recording": voiceMessage = "正在录音 · 说完点击停止（最长 5 分钟）"
@@ -800,7 +807,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         BridgeClient.call(pairing: pairing, path: "/v1/voice/consume", value: ["id": delivery.id]) { _ in }
     }
     private func updateVoice() {
-        voiceHint?.text = voiceMessage
+        let showDraft = !voiceDraft.isEmpty && ["recording", "stopping", "processing"].contains(voiceState)
+        voiceHint?.text = showDraft ? voiceDraft : voiceMessage
+        // A draft keeps its newest words in view; status messages keep their start.
+        voiceHint?.lineBreakMode = showDraft ? .byTruncatingHead : .byTruncatingTail
+        voiceHint?.textColor = showDraft ? .white : Lab.muted
+        voiceHint?.accessibilityLabel = showDraft ? "实时草稿：\(voiceDraft)" : nil
         let recording = voiceState == "recording"
         voiceButton?.configuration?.title = recording ? "停止" : ""
         voiceButton?.configuration?.image = UIImage(systemName: recording ? "stop.fill" : "mic.fill")
@@ -837,6 +849,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
         voiceID = nil; voicePairing = nil; voiceDelivery.reset(); voiceState = "idle"; voiceBusy = false
+        voiceDraft = ""
         voiceRevision = UUID(); voicePolling = false; voiceFailureSince = nil
         voiceMessage = message; updateVoice()
         refreshVoiceReadiness()
