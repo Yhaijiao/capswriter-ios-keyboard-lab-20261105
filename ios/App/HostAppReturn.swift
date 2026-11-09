@@ -64,18 +64,37 @@ final class HostAppReturn: NSObject {
 
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,
                                change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
-        guard keyPath == "currentState", let state = change?[.newKey] as? NSObject else { return }
-        let key = NSSelectorFromString("sourceBundleIdentifier")
-        guard state.responds(to: key), let id = state.value(forKey: "sourceBundleIdentifier") as? String,
-              !id.isEmpty, !Self.isOwn(id) else { return }
+        guard keyPath == "currentState", let state = change?[.newKey] as? NSObject,
+              let id = Self.source(of: state) else { return }
         DispatchQueue.main.async { self.lastHost = (id, Date()) }
     }
 
-    /// The host to return to: the keyboard's report, else one seen recently.
+    private static func source(of state: NSObject?) -> String? {
+        guard let state, state.responds(to: NSSelectorFromString("sourceBundleIdentifier")),
+              let id = state.value(forKey: "sourceBundleIdentifier") as? String,
+              !id.isEmpty, !isOwn(id) else { return nil }
+        return id
+    }
+
+    /// The host to return to: the keyboard's report, else the system's
+    /// current keyboard state, else the last host seen. The last one may be
+    /// older than this launch's tap when Lab was suspended in the background,
+    /// so it is trusted only for a few minutes.
     func host(reported: String?) -> String? {
         if let reported, !Self.isOwn(reported) { return reported }
-        guard let last = lastHost, Date().timeIntervalSince(last.at) < 8 else { return nil }
+        if let current = Self.source(of: observed?.value(forKey: "currentState") as? NSObject) {
+            lastHost = (current, Date()); return current
+        }
+        guard let last = lastHost, Date().timeIntervalSince(last.at) < 300 else { return nil }
         return last.bundleID
+    }
+
+    /// A readable name for the status line.
+    static func displayName(_ bundleID: String) -> String {
+        let names = ["com.tencent.xin": "微信", "com.apple.mobilenotes": "备忘录",
+                     "com.apple.MobileSMS": "信息", "com.tencent.mqq": "QQ",
+                     "com.apple.mobilesafari": "Safari", "com.anthropic.claude": "Claude"]
+        return names[bundleID] ?? bundleID
     }
 
     /// Opens the host app. Returns false when it isn't in the catalog.
