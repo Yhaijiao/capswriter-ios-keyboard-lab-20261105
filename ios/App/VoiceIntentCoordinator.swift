@@ -55,7 +55,8 @@ final class VoiceIntentCoordinator {
         }
         if session.active { return }
         // Only this explicit, system-dispatched intent can request background arm.
-        session.start(pairing: pairing, sessionMinutes: 10, intentActivityID: activity?.id)
+        let saved = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
+        session.start(pairing: pairing, sessionMinutes: [10, 30, 60].contains(saved) ? saved : 60, intentActivityID: activity?.id)
         do {
             for _ in 0..<200 {
                 if session.active { return }

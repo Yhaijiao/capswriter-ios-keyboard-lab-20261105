@@ -14,10 +14,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
     func application(_ app: UIApplication, open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        guard url.scheme == "capswriterlab", url.host == "pair",
+        guard url.scheme == "capswriterlab",
               let navigation = window?.rootViewController as? UINavigationController,
               let controller = navigation.viewControllers.first as? LabViewController else { return false }
-        controller.offerPairing(url); return true
+        switch url.host {
+        case "pair": controller.offerPairing(url); return true
+        case "renew": controller.renewFromKeyboard(); return true
+        default: return false
+        }
     }
 }
 
@@ -132,7 +136,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         stack.addArrangedSubview(Lab.label("手机模式由 Apple 本地识别，首次需准备语言模型；文字仍交给所选服务应用热词。点“识别服务”可切回服务端识别。", size: 13, color: Lab.muted))
         stack.addArrangedSubview(Lab.label("也可手动选择时长并重新开启：", size: 14, color: Lab.muted))
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
-        duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 0
+        duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 2
         duration.accessibilityIdentifier = "voice-session-duration"
         stack.addArrangedSubview(duration)
         stack.addArrangedSubview(Lab.button("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
@@ -173,7 +177,27 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     }
 
     @objc private func appBecameActive() { beginAutomaticSessionIfNeeded() }
-    @objc private func appEnteredBackground() { autoStartPolicy.enteredBackground() }
+    @objc private func appEnteredBackground() {
+        autoStartPolicy.enteredBackground()
+        navigationItem.prompt = nil
+    }
+
+    /// The keyboard found the session lapsed and sent the user here. Start or
+    /// extend it to 60 minutes; iOS only lets the user go back themselves,
+    /// via the "◀" in the status bar, and the keyboard then starts recording.
+    func renewFromKeyboard() {
+        view.endEditing(true)
+        guard let pairing = BridgePairingStore.activePairing(), !pairing.isExpired() else {
+            voiceStatus.text = "请先在下方配对识别服务，再回键盘录音。"; return
+        }
+        autoStartPolicy.userStoppedOrStarted()
+        voice.renew(pairing: pairing, minutes: VoiceSessionRenewal.minutes)
+        navigationItem.prompt = "语音会话续到 \(VoiceSessionRenewal.minutes) 分钟 · 点左上角「◀」返回，键盘会自动录音"
+        let shown = navigationItem.prompt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
+        }
+    }
     @objc private func recognitionModeChanged() {
         let value = ["cloud", "phone-zh", "phone-en"][max(0, min(2, recognitionMode.selectedSegmentIndex))]
         UserDefaults.standard.set(value, forKey: "voice.recognitionMode")
@@ -198,7 +222,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         guard autoStartPolicy.shouldStart(enabled: automaticSession.isOn,
             configured: true, foreground: visible,
             busy: voice.active || voice.starting) else { return }
-        voice.start(pairing: pairing, sessionMinutes: 10)
+        voice.start(pairing: pairing, sessionMinutes: [10, 30, 60][max(0, min(2, duration.selectedSegmentIndex))])
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) { revealEditor() }
@@ -343,7 +367,10 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     }
 
     private func showPairing(_ pairing: BridgePairing?) {
-        address.text = pairing?.address
+        // Nothing saved for the home computer yet: start from its usual address,
+        // so only the pairing token has to be typed.
+        let selected = profiles?.selected ?? .home
+        address.text = pairing?.address ?? (selected == .home ? BridgeTarget.defaultHomeAddress : nil)
         token.text = pairing?.token
     }
 

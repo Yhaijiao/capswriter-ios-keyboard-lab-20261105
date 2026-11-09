@@ -81,6 +81,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var intentWarmupID: UUID?
     private var intentWarmupDocumentID: UUID?
     private var voiceStarted = Date.distantPast
+    private var autoNewline = AutoNewlineMode.load()
+    private var voiceUndo = VoiceUndoRecord()
+    private weak var undoButton: UIButton?
+    private weak var newlineButton: UIButton?
+    private var resumeRequest: UUID?
     private var appeared = false
     private var deleteTimer: Timer?
     private var deleteStarted = Date.distantPast
@@ -93,6 +98,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         cancelIntentWarmup()
         removeVoiceIntentControl()
         stopDeleting()
+        resumeRequest = nil
         voiceTimer?.invalidate(); voiceTimer = nil
         if voiceID == nil { voiceRevision = UUID(); voiceBusy = false }
         if ["pending", "recording"].contains(voiceState) { cancelVoice() }
@@ -107,6 +113,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         insertVoiceResultIfReady()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
         updateVoice(); startVoiceReadiness()
+        resumeAfterRenewalIfNeeded()
     }
 
     override func viewDidLoad() {
@@ -396,14 +403,28 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         hotwords.accessibilityIdentifier = "keyboard-hotwords"
         hotwords.accessibilityLabel = "查看与编辑热词"
         hotwords.translatesAutoresizingMaskIntoConstraints = false; right.addSubview(hotwords)
+        let newline = key("", symbol: "arrow.turn.down.left") { [weak self] in self?.toggleAutoNewline() }
+        newline.accessibilityIdentifier = "keyboard-auto-newline"
+        let undo = key("", symbol: "arrow.uturn.backward") { [weak self] in self?.undoVoiceInsert() }
+        undo.accessibilityIdentifier = "keyboard-voice-undo"
+        undo.accessibilityLabel = "撤回上一段语音"
+        newlineButton = newline; undoButton = undo
+        let leftKeys = UIStackView(arrangedSubviews: [newline, undo]); leftKeys.spacing = 5
+        leftKeys.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(leftKeys)
         let lastRow = row([left, enter, right], equal: false)
         NSLayoutConstraint.activate([
             left.widthAnchor.constraint(equalTo: right.widthAnchor),
+            leftKeys.leadingAnchor.constraint(equalTo: left.leadingAnchor),
+            leftKeys.centerYAnchor.constraint(equalTo: left.centerYAnchor),
+            leftKeys.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor),
+            newline.widthAnchor.constraint(equalToConstant: 44),
+            undo.widthAnchor.constraint(equalToConstant: 44),
             hotwords.trailingAnchor.constraint(equalTo: right.trailingAnchor),
             hotwords.centerYAnchor.constraint(equalTo: right.centerYAnchor),
             hotwords.widthAnchor.constraint(equalToConstant: 44)
         ])
         content.addArrangedSubview(lastRow)
+        updateVoiceEditKeys()
     }
 
     private func voiceCall(_ path: String, value: [String: Any]? = nil, jobID: String? = nil,
@@ -447,9 +468,98 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             return
         }
         guard !["pending", "stopping", "processing"].contains(voiceState) else { return }
+        resumeRequest = nil
         guard let pairing = bridgePairing else {
             voiceMessage = "请在 Lab 配对识别服务。"; updateVoice(); return
         }
+        // Lab extends its session each time a recording starts, so a live
+        // session always has room. Only a lapsed one needs a trip to Lab.
+        guard voiceAgentReady == true else { checkSessionThenRecord(pairing); return }
+        startRecording(pairing)
+    }
+    private func checkSessionThenRecord(_ pairing: BridgePairing) {
+        voiceRevision = UUID(); let revision = voiceRevision
+        voiceBusy = true; voiceMessage = "正在检查语音会话…"; updateVoice()
+        BridgeClient.call(pairing: pairing, path: "/v1/status", timeout: 3) { [weak self] result in
+            guard let self = self, self.voiceRevision == revision, self.voiceID == nil else { return }
+            self.voiceBusy = false
+            if case .success(let reply) = result {
+                self.voiceAgentReady = reply.agent_ready == true
+                if reply.voice_enabled == true && reply.agent_ready != true { self.renewSessionInLab(); return }
+            }
+            // Unknown (network) state: try anyway; a failure shows its own message.
+            self.startRecording(pairing)
+        }
+    }
+    private func renewSessionInLab() {
+        let defaults = UserDefaults.standard
+        defaults.set(Date().timeIntervalSince1970, forKey: VoiceSessionRenewal.pendingKey)
+        if openContainingApp(VoiceSessionRenewal.url) {
+            voiceMessage = "语音会话已结束，正在打开 Lab 续上…"
+        } else {
+            defaults.removeObject(forKey: VoiceSessionRenewal.pendingKey)
+            voiceMessage = "语音会话已结束，请打开 SayKey Lab 重新开启。"
+        }
+        updateVoice()
+    }
+    /// Keyboards have no public API to open their containing app. Walk the
+    /// responder chain to the host UIApplication and send it the open message
+    /// dynamically (the typed method is unavailable to extensions).
+    private func openContainingApp(_ url: URL) -> Bool {
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current is UIApplication, current.responds(to: selector), let method = current.method(for: selector) {
+                typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, (@convention(block) (Bool) -> Void)?) -> Void
+                unsafeBitCast(method, to: Open.self)(current, selector, url as NSURL, NSDictionary(), nil)
+                return true
+            }
+            responder = current.next
+        }
+        return false
+    }
+    private var canOpenContainingApp: Bool {
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if current is UIApplication { return current.responds(to: selector) }
+            responder = current.next
+        }
+        return false
+    }
+    /// Coming back from Lab after a renewal continues the tap that sent the
+    /// user there: wait briefly for the fresh session, then start recording.
+    private func resumeAfterRenewalIfNeeded() {
+        let defaults = UserDefaults.standard
+        let requested = defaults.double(forKey: VoiceSessionRenewal.pendingKey)
+        guard requested > 0 else { return }
+        defaults.removeObject(forKey: VoiceSessionRenewal.pendingKey)
+        guard Date().timeIntervalSince1970 - requested < VoiceSessionRenewal.resumeWindow,
+              hasFullAccess, mode == .voice, hotEditor == nil, voiceID == nil, voiceState == "idle",
+              let pairing = BridgePairingStore.activePairing() else { return }
+        let request = UUID(); resumeRequest = request
+        voiceMessage = "语音会话已续上 · 正在开始录音…"; updateVoice()
+        waitForSession(pairing, request: request, deadline: Date().addingTimeInterval(8))
+    }
+    private func waitForSession(_ pairing: BridgePairing, request: UUID, deadline: Date) {
+        guard resumeRequest == request, appeared, voiceID == nil, voiceState == "idle", !voiceBusy else { return }
+        guard Date() < deadline else {
+            resumeRequest = nil
+            voiceMessage = "Lab 还没开启语音会话，点麦克风重试。"; updateVoice(); return
+        }
+        BridgeClient.call(pairing: pairing, path: "/v1/status", timeout: 2) { [weak self] result in
+            guard let self = self, self.resumeRequest == request else { return }
+            if case .success(let reply) = result, reply.agent_ready == true {
+                self.resumeRequest = nil; self.voiceAgentReady = true
+                guard self.appeared, self.voiceID == nil, self.voiceState == "idle", !self.voiceBusy else { return }
+                self.startRecording(pairing); return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.waitForSession(pairing, request: request, deadline: deadline)
+            }
+        }
+    }
+    private func startRecording(_ pairing: BridgePairing) {
         voicePairing = pairing
         voiceRevision = UUID(); let revision = voiceRevision
         let documentID = textDocumentProxy.documentIdentifier
@@ -506,7 +616,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func updateVoiceIntentControl() {
         let showIntent = canUseVoiceIntent && voiceID == nil && voiceState == "idle"
-            && (voiceAgentReady != true || intentWarmupID != nil)
+            && (voiceAgentReady != true || intentWarmupID != nil) && !canOpenContainingApp
         guard showIntent, let container = voiceContainer else { removeVoiceIntentControl(); return }
         if #available(iOS 18.0, *) {
             let control = KeyboardVoiceIntentControl(isEnabled: !voiceBusy) { [weak self] in self?.beginIntentWarmup() }
@@ -646,8 +756,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard let delivery = voiceDelivery.take(visible: true, documentID: documentID) else { return }
         let pairing = voicePairing
         commitComposition()
-        textDocumentProxy.insertText(delivery.text)
-        resetVoice("Tap to speak")
+        let inserted = autoNewline.apply(to: delivery.text)
+        textDocumentProxy.insertText(inserted)
+        voiceUndo.record(inserted, documentID: documentID)
+        resetVoice("已上屏 · 不满意可点左下 ↶ 撤回")
         BridgeClient.call(pairing: pairing, path: "/v1/voice/consume", value: ["id": delivery.id]) { _ in }
     }
     private func updateVoice() {
@@ -660,6 +772,30 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         // Polling requests don't disable the stop button, so a tap is never silently lost.
         voiceButton?.isEnabled = !voiceBusy && !["pending", "stopping", "processing"].contains(voiceState)
         updateVoiceIntentControl()
+        updateVoiceEditKeys()
+    }
+    private func updateVoiceEditKeys() {
+        let idle = voiceID == nil && voiceState == "idle"
+        undoButton?.isEnabled = idle && voiceUndo.isAvailable
+        guard let newline = newlineButton else { return }
+        let on = autoNewline != .off
+        newline.configuration?.baseBackgroundColor = autoNewline == .hard ? UIColor.systemOrange : (on ? UIColor.systemBlue : Lab.surface)
+        newline.configuration?.baseForegroundColor = on ? .white : Lab.muted
+        newline.accessibilityLabel = autoNewline.hint
+    }
+    private func toggleAutoNewline() {
+        autoNewline = autoNewline.next; autoNewline.save()
+        voiceMessage = autoNewline.hint; updateVoice()
+    }
+    private func undoVoiceInsert() {
+        guard voiceID == nil, voiceState == "idle", hotEditor == nil, voiceUndo.isAvailable else { return }
+        let proxy = textDocumentProxy
+        guard let count = voiceUndo.deletions(documentID: proxy.documentIdentifier,
+                                              textBeforeCursor: proxy.documentContextBeforeInput) else {
+            voiceUndo.clear(); voiceMessage = "光标已移动或换了输入框，无法撤回。"; updateVoice(); return
+        }
+        for _ in 0..<count { proxy.deleteBackward() }
+        voiceUndo.clear(); voiceMessage = "已撤回上一段语音"; updateVoice()
     }
     private func resetVoice(_ message: String) {
         voiceTimer?.invalidate(); voiceTimer = nil
@@ -772,6 +908,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             } else { insertText(" "); lastSpaceAt = Date() }
         } else { commitComposition(); lastSpaceAt = Date(); spaceCommittedComposition = true }
     }
+    private func clearVoiceUndo() {
+        guard voiceUndo.isAvailable else { return }
+        voiceUndo.clear(); updateVoiceEditKeys()
+    }
     private func deleteCharacter() {
         guard !hotSaving else { return }
         spaceCommittedComposition = false
@@ -788,7 +928,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
                     editor.textStorage.replaceCharacters(in: range, with: "")
                     editor.selectedRange = NSRange(location: range.location, length: 0)
                 }
-            } else { textDocumentProxy.deleteBackward() }
+            } else { textDocumentProxy.deleteBackward(); clearVoiceUndo() }
         }
         else { composition.removeLast(); updateCandidates() }
     }
@@ -975,6 +1115,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
 
     private func insertText(_ text: String) {
         guard !hotSaving else { return }
+        clearVoiceUndo()
         guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
         let length = (editor.text as NSString).length
         let selected = editor.selectedRange

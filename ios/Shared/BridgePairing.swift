@@ -4,6 +4,9 @@ enum BridgeTarget: String, Codable, CaseIterable {
     case home, aws
 
     var title: String { self == .home ? "家里电脑" : "AWS 云端" }
+    /// Jeremy's home computer on his tailnet; reachable only inside it and
+    /// still needs the pairing token.
+    static let defaultHomeAddress = "https://jeremyhomepc.tail802252.ts.net"
 }
 
 struct BridgePairing: Codable, Equatable {
