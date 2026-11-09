@@ -7,7 +7,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.rootViewController = UINavigationController(rootViewController: LabViewController())
-        window.overrideUserInterfaceStyle = .dark
+        window.overrideUserInterfaceStyle = .light
+        window.tintColor = Theme.aqua
         window.makeKeyAndVisible()
         self.window = window
         return true
@@ -30,9 +31,9 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let editor = UITextView()
     private let address = UITextField()
     private let token = UITextField()
-    private let updateStatus = Lab.label("", size: 14, color: Lab.muted)
+    private let updateStatus = Theme.label("", size: 14, color: Theme.muted)
     private let bridgeTarget = UISegmentedControl(items: BridgeTarget.allCases.map(\.title))
-    private let bridgeSwitchStatus = Lab.label("", size: 14, color: Lab.muted)
+    private let bridgeSwitchStatus = Theme.label("", size: 14, color: Theme.muted)
     private var profiles: BridgeProfiles?
     private var connectionRequest = UUID()
     private let voice = VoiceIntentCoordinator.shared.session
@@ -40,14 +41,20 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     private let recognitionMode = UISegmentedControl(items: ["识别服务", "手机中文", "手机英文"])
     private let duration = UISegmentedControl(items: ["10 分钟", "30 分钟", "60 分钟"])
     private var autoStartPolicy = VoiceSessionAutoStartPolicy()
-    private let voiceStatus = Lab.label("语音会话未开启 · 麦克风关闭", size: 14, color: Lab.muted)
-    private let status = Lab.label("未连接识别服务 · 基本键盘输入无需联网", size: 14, color: Lab.muted)
+    private let voiceStatus = Theme.label("语音会话未开启 · 麦克风关闭", size: 14, color: Theme.muted)
+    private let status = Theme.label("未连接识别服务 · 基本键盘输入无需联网", size: 14, color: Theme.muted)
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "SayKey Lab"
+        navigationItem.titleView = UIView()  // the header below shows the name
+        let bar = UINavigationBarAppearance()
+        bar.configureWithTransparentBackground()
+        bar.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
+        navigationItem.standardAppearance = bar
+        navigationItem.scrollEdgeAppearance = bar
         UserDefaults.standard.register(defaults: ["voice.autoStart": true])
-        view.backgroundColor = Lab.background
+        Theme.installBackground(in: view)
         scroll.keyboardDismissMode = .interactive
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
@@ -68,40 +75,43 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24),
             stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48)
         ])
-        let title = Lab.label("你的声音，\n从这里开始。", size: 34)
-        title.font = .boldSystemFont(ofSize: 34)
-        stack.addArrangedSubview(title)
-        stack.addArrangedSubview(Lab.label("v\(Lab.version) · 免费侧载实验版\n手机采集语音，交给你配对的识别服务处理。支持英文输入、离线拼音与三页滑动切换。", size: 15, color: Lab.muted))
-        stack.addArrangedSubview(Lab.label("1  启用键盘", size: 21))
-        stack.addArrangedSubview(Lab.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → SayKey Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Lab.muted))
-        stack.addArrangedSubview(Lab.button("打开 App 设置", symbol: "gearshape") {
+        stack.addArrangedSubview(Theme.header(version: Lab.version))
+        stack.setCustomSpacing(14, after: stack.arrangedSubviews[0])
+        stack.addArrangedSubview(Theme.slogan("你的声音，从这里开始。"))
+        stack.addArrangedSubview(Theme.label("免费侧载实验版。手机采集语音，交给你配对的识别服务处理。支持英文输入、离线拼音与三页滑动切换。", size: 15, color: Theme.muted))
+        var card = Theme.section(1, "启用键盘", in: stack)
+        card.addArrangedSubview(Theme.label("设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → SayKey Lab。\n基础输入无需开启“允许完全访问”。", size: 15, color: Theme.muted))
+        card.addArrangedSubview(Theme.primaryButton("打开 App 设置", symbol: "gearshape") {
             guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
             UIApplication.shared.open(url)
         })
-        stack.addArrangedSubview(Lab.label("2  在这里试一试", size: 21))
+        card = Theme.section(2, "在这里试一试", in: stack)
         editor.text = "点击这里，长按地球键切换到 SayKey Lab。\n"
         editor.delegate = self
         editor.font = .systemFont(ofSize: 18)
-        editor.textColor = .white; editor.backgroundColor = Lab.surface
-        editor.layer.cornerRadius = 18; editor.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
+        editor.textColor = Theme.ink; editor.backgroundColor = Theme.field
+        editor.layer.borderWidth = 1.5; editor.layer.borderColor = Theme.fieldBorder.cgColor
+        editor.layer.cornerRadius = 14; editor.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
         editor.accessibilityIdentifier = "lab-editor"
         editor.heightAnchor.constraint(equalToConstant: 160).isActive = true
-        stack.addArrangedSubview(editor)
-        stack.addArrangedSubview(Lab.button("清空测试区", symbol: "trash") { [weak self] in self?.editor.text = "" })
-        stack.addArrangedSubview(Lab.label("3  连接识别服务", size: 21))
-        stack.addArrangedSubview(Lab.label("家里电脑和 AWS 各保存一份配对，键盘跟随 Lab 的选择。请在 AWS 控制台启停实例。局域网可用 HTTP，公网必须用 HTTPS。", size: 15, color: Lab.muted))
+        card.addArrangedSubview(editor)
+        card.addArrangedSubview(Theme.button("清空测试区", symbol: "trash") { [weak self] in self?.editor.text = "" })
+        card = Theme.section(3, "连接识别服务", in: stack)
+        card.addArrangedSubview(Theme.label("家里电脑和 AWS 各保存一份配对，键盘跟随 Lab 的选择。请在 AWS 控制台启停实例。局域网可用 HTTP，公网必须用 HTTPS。", size: 15, color: Theme.muted))
+        Theme.style(bridgeTarget); Theme.style(recognitionMode); Theme.style(duration)
+        automaticSession.onTintColor = Theme.aquaLight
         bridgeTarget.accessibilityIdentifier = "bridge-target"
         bridgeTarget.addTarget(self, action: #selector(bridgeTargetChanged), for: .valueChanged)
-        stack.addArrangedSubview(bridgeTarget)
+        card.addArrangedSubview(bridgeTarget)
         bridgeSwitchStatus.isHidden = true
-        stack.addArrangedSubview(bridgeSwitchStatus)
+        card.addArrangedSubview(bridgeSwitchStatus)
         configure(address, placeholder: "http://局域网IP 或 https://服务器IP")
         address.keyboardType = .URL
         configure(token, placeholder: "识别服务配对码")
         token.isSecureTextEntry = true
-        stack.addArrangedSubview(address); stack.addArrangedSubview(token)
-        stack.addArrangedSubview(Lab.button("保存配对并检查连接", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
-        let legacyCopy = Lab.button("复制旧版键盘配对配置", symbol: "doc.on.doc") { [weak self] in
+        card.addArrangedSubview(address); card.addArrangedSubview(token)
+        card.addArrangedSubview(Theme.primaryButton("保存配对并检查连接", symbol: "arrow.triangle.2.circlepath") { [weak self] in self?.connect(correct: false) })
+        let legacyCopy = Theme.button("复制旧版键盘配对配置", symbol: "doc.on.doc") { [weak self] in
             guard let self = self else { return }
             guard let pairing = self.savePairing() else { return }
             guard !pairing.isExpired() else { self.status.text = "试验服务器配置已到期，请更新配对配置。"; return }
@@ -114,32 +124,32 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             self.status.text = "配对配置已复制，5 分钟后过期。键盘 → 热词 → 齿轮 → 粘贴配对配置。"
             self.beginAutomaticSessionIfNeeded()
         }
-        stack.addArrangedSubview(legacyCopy)
+        card.addArrangedSubview(legacyCopy)
         loadBridgeProfiles()
         legacyCopy.isHidden = profiles != nil || BridgePairingStore.hasUsedSharedProfiles
-        stack.addArrangedSubview(Lab.button("用服务规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
-        stack.addArrangedSubview(status)
-        stack.addArrangedSubview(Lab.label("4  开启语音会话", size: 21))
-        stack.addArrangedSubview(Lab.label("保存配对配置后，打开 Lab 自动开启 60 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Lab.muted))
+        card.addArrangedSubview(Theme.button("用服务规则处理测试区文字", symbol: "text.badge.checkmark") { [weak self] in self?.connect(correct: true) })
+        card.addArrangedSubview(status)
+        card = Theme.section(4, "开启语音会话", in: stack)
+        card.addArrangedSubview(Theme.label("保存配对配置后，打开 Lab 自动开启 60 分钟语音会话，无需选择时长或再点开启；已有会话沿用原计时。\n开启期间麦克风持续工作，系统显示录音指示；只有键盘主动开始、停止的片段会提交识别，待机声音丢弃。\n回到输入框：点击麦克风 → 看到正在录音后说话 → 停止 → 识别完成后自动上屏。单段最长 5 分钟。", size: 15, color: Theme.muted))
         automaticSession.isOn = UserDefaults.standard.bool(forKey: "voice.autoStart")
         automaticSession.accessibilityIdentifier = "voice-auto-start"
         automaticSession.addTarget(self, action: #selector(automaticSessionChanged), for: .valueChanged)
-        let autoRow = UIStackView(arrangedSubviews: [Lab.label("打开 Lab 自动开启 60 分钟", size: 16), automaticSession])
+        let autoRow = UIStackView(arrangedSubviews: [Theme.label("打开 Lab 自动开启 60 分钟", size: 16), automaticSession])
         autoRow.axis = .horizontal; autoRow.spacing = 12; autoRow.alignment = .center
-        stack.addArrangedSubview(autoRow)
-        stack.addArrangedSubview(Lab.label("识别方式 · 手机为可撤回实验", size: 16))
+        card.addArrangedSubview(autoRow)
+        card.addArrangedSubview(Theme.label("识别方式 · 手机为可撤回实验", size: 16))
         let savedMode = UserDefaults.standard.string(forKey: "voice.recognitionMode") ?? "cloud"
         recognitionMode.selectedSegmentIndex = ["cloud", "phone-zh", "phone-en"].firstIndex(of: savedMode) ?? 0
         recognitionMode.accessibilityIdentifier = "voice-recognition-mode"
         recognitionMode.addTarget(self, action: #selector(recognitionModeChanged), for: .valueChanged)
-        stack.addArrangedSubview(recognitionMode)
-        stack.addArrangedSubview(Lab.label("手机模式由 Apple 本地识别，首次需准备语言模型；文字仍交给所选服务应用热词。点“识别服务”可切回服务端识别。", size: 13, color: Lab.muted))
-        stack.addArrangedSubview(Lab.label("也可手动选择时长并重新开启：", size: 14, color: Lab.muted))
+        card.addArrangedSubview(recognitionMode)
+        card.addArrangedSubview(Theme.label("手机模式由 Apple 本地识别，首次需准备语言模型；文字仍交给所选服务应用热词。点“识别服务”可切回服务端识别。", size: 13, color: Theme.muted))
+        card.addArrangedSubview(Theme.label("也可手动选择时长并重新开启：", size: 14, color: Theme.muted))
         let savedMinutes = UserDefaults.standard.integer(forKey: "voice.sessionMinutes")
         duration.selectedSegmentIndex = [10, 30, 60].firstIndex(of: savedMinutes) ?? 2
         duration.accessibilityIdentifier = "voice-session-duration"
-        stack.addArrangedSubview(duration)
-        stack.addArrangedSubview(Lab.button("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
+        card.addArrangedSubview(duration)
+        card.addArrangedSubview(Theme.primaryButton("手动开启 / 重新计时", symbol: "mic.fill") { [weak self] in
             guard let self = self else { return }
             self.view.endEditing(true)
             guard let pairing = self.savePairing() else { return }
@@ -149,18 +159,18 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             if self.voice.active || self.voice.starting { self.voice.stop(message: "正在重新开启语音会话…") }
             self.voice.start(pairing: pairing, sessionMinutes: minutes)
         })
-        stack.addArrangedSubview(Lab.button("关闭本次语音会话", symbol: "stop.circle") { [weak self] in
+        card.addArrangedSubview(Theme.button("关闭本次语音会话", symbol: "stop.circle") { [weak self] in
             guard let self = self else { return }
             self.autoStartPolicy.userStoppedOrStarted()
             self.voice.stop(message: self.automaticSession.isOn ? "本次语音会话已关闭。重新打开 Lab 时会自动开启；也可关闭上方自动开关。" : "语音会话已关闭，麦克风已停止。")
         })
         voice.onStatus = { [weak self] text in self?.voiceStatus.text = text }
-        stack.addArrangedSubview(voiceStatus)
-        stack.addArrangedSubview(Lab.label("5  更新与续签", size: 21))
-        stack.addArrangedSubview(Lab.label("首次用电脑设置 SideStore 后，连 Wi-Fi 和 LocalDevVPN，点下方按钮可安装最新实验版。免费签名仍需每 7 天续签。", size: 15, color: Lab.muted))
-        stack.addArrangedSubview(Lab.button("用 SideStore 安装更新", symbol: "arrow.down.app") { [weak self] in self?.openSideStoreUpdate() })
-        stack.addArrangedSubview(updateStatus)
-        stack.addArrangedSubview(Lab.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网使用 HTTPS；局域网 HTTP 仅用于可信网络。配对保存在本机，热词仅在你点击保存时写回。", size: 13, color: Lab.muted))
+        card.addArrangedSubview(voiceStatus)
+        card = Theme.section(5, "更新与续签", in: stack)
+        card.addArrangedSubview(Theme.label("首次用电脑设置 SideStore 后，连 Wi-Fi 和 LocalDevVPN，点下方按钮可安装最新实验版。免费签名仍需每 7 天续签。", size: 15, color: Theme.muted))
+        card.addArrangedSubview(Theme.primaryButton("用 SideStore 安装更新", symbol: "arrow.down.app") { [weak self] in self?.openSideStoreUpdate() })
+        card.addArrangedSubview(updateStatus)
+        stack.addArrangedSubview(Theme.label("隐私：无广告、无统计。仅连接你确认配对的识别服务。公网使用 HTTPS；局域网 HTTP 仅用于可信网络。配对保存在本机，热词仅在你点击保存时写回。", size: 13, color: Theme.muted))
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
             name: UIResponder.keyboardDidShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardLayoutChanged),
@@ -264,7 +274,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
 
     private func configure(_ field: UITextField, placeholder: String) {
         field.placeholder = placeholder
-        field.borderStyle = .roundedRect; field.autocorrectionType = .no
+        Theme.style(field); field.autocorrectionType = .no
         field.autocapitalizationType = .none; field.font = .systemFont(ofSize: 16)
         field.heightAnchor.constraint(equalToConstant: 46).isActive = true
     }
