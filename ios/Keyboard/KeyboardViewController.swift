@@ -493,8 +493,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         // Lab extends its session each time a recording starts, so a live
         // session always has room. Only a lapsed one needs a trip to Lab.
-        // Known to be off: go straight to Lab, no waiting.
-        if voiceAgentReady == false && canOpenContainingApp { renewSessionInLab(); return }
+        // Not known to be on: go straight to Lab without asking the computer
+        // first. If Lab was already running it sends the user back at once.
+        if voiceAgentReady != true && canOpenContainingApp { renewSessionInLab(); return }
         guard voiceAgentReady == true else { checkSessionThenRecord(pairing); return }
         startRecording(pairing)
     }
@@ -516,7 +517,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         let defaults = UserDefaults.standard
         defaults.set(Date().timeIntervalSince1970, forKey: VoiceSessionRenewal.pendingKey)
         if openContainingApp(VoiceSessionRenewal.url(returningTo: hostBundleID)) {
-            voiceMessage = "语音会话已结束，正在打开 Lab 续上…"
+            voiceMessage = "正在打开 Lab 开启语音会话，马上回来…"
         } else {
             defaults.removeObject(forKey: VoiceSessionRenewal.pendingKey)
             voiceMessage = "语音会话已结束，请打开 SayKey Lab 重新开启。"

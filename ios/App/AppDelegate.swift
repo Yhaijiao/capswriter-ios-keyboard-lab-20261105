@@ -212,13 +212,17 @@ final class LabViewController: UIViewController, UITextViewDelegate {
     }
 
     /// Once the microphone is on, go back to the app the keyboard was in.
-    /// The host may be learned a moment after launch, so keep asking until then.
+    /// Lab is still coming to the foreground when the keyboard opens it, and
+    /// the host may be learned a moment later, so keep trying until then.
     private func returnWhenSessionIsUp(reported: String?, attempts: Int) {
-        guard attempts > 0, UIApplication.shared.applicationState == .active else { return }
-        guard voice.active, let host = HostAppReturn.shared.host(reported: reported) else {
-            let gaveUp = attempts == 1
-            if gaveUp, voice.active {
-                navigationItem.prompt = "语音会话已续上 · 请点左上角「◀」返回，键盘会自动录音"
+        guard attempts > 0, UIApplication.shared.applicationState != .background else { return }
+        let found = HostAppReturn.shared.host(reported: reported)
+        guard UIApplication.shared.applicationState == .active, voice.active, let host = found else {
+            if attempts == 1 {
+                let source = found.map { "检测到来源：\(HostAppReturn.displayName($0))，但未能自动返回" } ?? "没检测到来源 App"
+                navigationItem.prompt = voice.active
+                    ? "语音会话已续上 · \(source) · 请点左上角「◀」返回"
+                    : "语音会话还没开启 · \(source)"
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.returnWhenSessionIsUp(reported: reported, attempts: attempts - 1)
@@ -226,7 +230,7 @@ final class LabViewController: UIViewController, UITextViewDelegate {
             return
         }
         if !HostAppReturn.shared.open(host) && !Self.openApplication(host) {
-            navigationItem.prompt = "语音会话已续上 · 请点左上角「◀」返回，键盘会自动录音"
+            navigationItem.prompt = "语音会话已续上 · 检测到来源：\(HostAppReturn.displayName(host))，此 App 暂不支持自动返回 · 请点左上角「◀」"
         }
     }
 
