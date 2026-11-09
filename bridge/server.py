@@ -172,7 +172,7 @@ def main():
     parser.add_argument('--token-file', type=Path, help='Optional token file inside your private project folder')
     parser.add_argument('--asr-port', type=int, help='Enable voice via the existing loopback desktop ASR server, usually 6016')
     parser.add_argument('--hotwords-state', type=Path, help='Private directory for hotword backups and temporary saves')
-    parser.add_argument('--enable-hotword-save', action='store_true', help='Explicitly allow saving only desktop hot.txt')
+    parser.add_argument('--enable-hotword-save', action='store_true', help='Explicitly allow saving desktop hot.txt, personal aliases and rules')
     args = parser.parse_args()
     if bool(args.desktop) == bool(args.demo): parser.error('Choose exactly one of --desktop or --demo')
     ip = ipaddress.ip_address(args.host)

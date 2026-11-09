@@ -1,7 +1,8 @@
 """Versioned access to explicitly configured hotword files.
 
-Only hot.txt is writable, and only when the local operator enables it. Backups
-and temporary files stay in the configured private state directory.
+Only the personal files (hot.txt, personal aliases and replacement rules) are
+writable, and only when the local operator enables it. Backups and temporary
+files stay in the configured private state directory.
 """
 from __future__ import annotations
 from contextlib import contextmanager
@@ -14,6 +15,9 @@ import threading
 FILES = {'hot': 'hot.txt', 'aliases': 'hot-personal-aliases.txt',
          'auto': 'auto-hotwords/hot-auto.txt', 'rule': 'hot-rule.txt',
          'asr': 'hot-server.txt'}
+# Files the owner edits by hand. hot-auto is generated and hot-server only
+# takes effect after a server restart, so both stay read-only.
+WRITABLE = ('hot', 'aliases', 'rule')
 MAX_HOT_BYTES = 256 * 1024
 
 
@@ -51,11 +55,11 @@ class HotwordStore:
             for file_id, name in FILES.items():
                 _, _, text, revision = self._read(file_id)
                 files.append(dict(id=file_id, name=name, text=text, revision=revision,
-                                  writable=self.writable and file_id == 'hot'))
+                                  writable=self.writable and file_id in WRITABLE))
             return dict(hotword_files=files)
 
     def save(self, file_id, revision, text):
-        if not self.writable or file_id != 'hot':
+        if not self.writable or file_id not in WRITABLE:
             raise HotwordError(403, '这份词库尚未启用手机写回；当前可查看。')
         if not isinstance(text, str) or '\0' in text:
             raise HotwordError(400, 'Invalid hotword text')
@@ -69,14 +73,14 @@ class HotwordStore:
             if raw.decode('utf-8') == old_text:
                 return self.read()
             if self.validate:
-                try: self.validate(raw.decode('utf-8'))
+                try: self.validate(raw.decode('utf-8'), file_id)
                 except Exception: raise HotwordError(400, '热词格式无法加载，请检查后重试。')
             # Re-check after validation, which may take time on a large lexicon.
             if self._read(file_id)[3] != current:
                 raise HotwordError(409, '词库已在其他位置修改，请重新加载后再保存。')
             if old != raw:
                 self.state_root.mkdir(parents=True, exist_ok=True)
-                backup = self.state_root / ('hot.' + current + '.txt')
+                backup = self.state_root / (file_id + '.' + current + '.txt')
                 try:
                     with backup.open('xb') as stream: stream.write(old)
                 except FileExistsError:
