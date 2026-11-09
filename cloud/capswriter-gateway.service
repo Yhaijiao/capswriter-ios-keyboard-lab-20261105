@@ -22,7 +22,7 @@ ReadOnlyPaths=/srv/capswriter/private/bridge-token.txt /srv/capswriter/private/d
 ProtectHome=true
 StandardOutput=null
 StandardError=null
-MemoryMax=512M
+MemoryMax=1536M
 
 [Install]
 WantedBy=multi-user.target

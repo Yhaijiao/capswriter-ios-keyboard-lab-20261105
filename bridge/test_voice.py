@@ -209,6 +209,101 @@ class VoiceTests(unittest.TestCase):
         self.assertNotIn('private', result['error'])
 
 
+class FakePreview:
+    def __init__(self): self.sessions = []
+    def session(self):
+        preview = self
+        class Session:
+            def __init__(self): self.fed = b''; preview.sessions.append(self)
+            def feed(self, pcm):
+                self.fed += pcm
+                return f'草稿{len(self.fed)}'
+        return Session()
+
+
+class StreamTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 100
+        self.asr = FakeASR()
+        self.preview = FakePreview()
+        self.relay = VoiceRelay(DemoEngine(), self.asr, clock=lambda: self.now, preview=self.preview)
+        self.agent = 'test-phone-agent-id'
+        self.relay.agent(self.agent)
+        self.job_id = self.relay.start()['id']
+        self.relay.ack(self.job_id, self.agent)
+
+    def chunk(self, offset, pcm):
+        return self.relay.append_chunk(self.job_id, self.agent, offset, pcm)
+
+    def test_status_advertises_streaming(self):
+        status = self.relay.status()
+        self.assertTrue(status['audio_stream_v1']); self.assertTrue(status['live_preview'])
+        self.assertFalse(VoiceRelay(DemoEngine(), self.asr).status()['live_preview'])
+
+    def test_chunks_give_partial_and_finish_without_upload(self):
+        pcm = struct.pack('<h', 3277) * 16000
+        first = self.chunk(0, pcm[:16000])
+        self.assertEqual((first['received'], first['partial']), (16000, '草稿16000'))
+        self.chunk(16000, pcm[16000:])
+        self.assertEqual(self.relay.result(self.job_id)['partial'], '草稿32000')
+        self.relay.stop(self.job_id)
+        result = self.relay.finish_stream(self.job_id, self.agent, len(pcm))
+        self.assertEqual(result['state'], 'done')
+        self.assertEqual(result['text'], 'CapsWriter')
+        self.assertEqual(len(self.asr.pcm), len(pcm) * 2)
+        self.assertAlmostEqual(struct.unpack('<f', self.asr.pcm[:4])[0], 3277 / 32768, places=5)
+        self.assertEqual(self.relay.audio, bytearray())
+        self.assertEqual(self.relay.consume(self.job_id)['partial'], '')
+
+    def test_duplicate_overlap_and_gap_are_reported_by_received(self):
+        self.chunk(0, b'\x01\x00' * 100)
+        self.assertEqual(self.chunk(0, b'\x01\x00' * 100)['received'], 200)  # resent
+        self.assertEqual(self.chunk(100, b'\x02\x00' * 100)['received'], 300)  # overlap
+        self.assertEqual(self.chunk(1000, b'\x03\x00' * 10)['received'], 300)  # gap: resend from 300
+        self.assertEqual(self.preview.sessions[0].fed, b'\x01\x00' * 100 + b'\x02\x00' * 50)
+
+    def test_incomplete_stream_falls_back_to_whole_upload(self):
+        self.chunk(0, b'\x00\x00' * 16000)
+        self.relay.stop(self.job_id)
+        with self.assertRaisesRegex(VoiceError, '不完整'):
+            self.relay.finish_stream(self.job_id, self.agent, 64000)
+        self.assertEqual(self.relay.result(self.job_id)['state'], 'stopping')
+        pcm = b'\x00\x00' * 32000
+        self.relay.begin_receive(self.job_id, self.agent, 's16le', 16000, len(pcm))
+        self.assertEqual(self.relay.upload_pcm(self.job_id, self.agent, pcm)['state'], 'done')
+
+    def test_chunk_validation_and_state(self):
+        for offset, pcm in ((-2, b'\x00\x00'), (1, b'\x00\x00'), (0, b'\x00'),
+                            ('0', b'\x00\x00'), (0, b'\x00' * (16000 * 2 * 10 + 2))):
+            with self.assertRaises(VoiceError): self.chunk(offset, pcm)
+        with self.assertRaises(VoiceError):
+            self.relay.append_chunk(self.job_id, 'wrong', 0, b'\x00\x00')
+        self.relay.cancel(self.job_id)
+        with self.assertRaises(VoiceError): self.chunk(0, b'\x00\x00')
+        self.assertEqual(self.relay.result(self.job_id)['partial'], '')
+        self.assertEqual(self.relay.audio, bytearray())
+
+    def test_chunks_keep_job_alive_without_heartbeats(self):
+        for index in range(10):
+            self.now += 5
+            self.chunk(index * 16000, b'\x00\x00' * 8000)
+        self.assertEqual(self.relay.result(self.job_id)['state'], 'recording')
+
+    def test_preview_failure_does_not_break_recording(self):
+        def boom(pcm): raise RuntimeError('model crashed')
+        self.preview.sessions[0].feed = boom
+        self.assertEqual(self.chunk(0, b'\x00\x00' * 8000)['received'], 16000)
+        self.relay.stop(self.job_id)
+        self.assertEqual(self.relay.finish_stream(self.job_id, self.agent, 16000)['state'], 'done')
+
+    def test_new_recording_starts_with_empty_buffer(self):
+        self.chunk(0, b'\x00\x00' * 8000)
+        self.relay.cancel(self.job_id)
+        job = self.relay.start()
+        self.assertEqual((job['received'], job['partial']), (0, ''))
+        self.assertEqual(len(self.preview.sessions), 2)
+
+
 class VoiceHTTPTests(unittest.TestCase):
     def test_authenticated_phone_to_desktop_roundtrip(self):
         relay = VoiceRelay(DemoEngine(), FakeASR())
@@ -260,6 +355,29 @@ class VoiceHTTPTests(unittest.TestCase):
             self.assertEqual(request('/v1/voice/text', phone_value, 'wrong')[0], 401)
             self.assertEqual(request('/v1/voice/text', phone_value)[1]['text'], 'CapsWriter')
             self.assertEqual(request('/v1/voice/text', phone_value)[0], 409)
+            request('/v1/voice/consume', {'id': phone_id})
+            self.assertTrue(request('/v1/status')[1]['audio_stream_v1'])
+            code, stream_job = request('/v1/voice/start', {}); self.assertEqual(code, 200)
+            stream_id = stream_job['id']
+            request('/v1/voice/ack', {'id': stream_id, 'agent_id': 'http-test-phone-id'})
+            def chunk(offset, body, token='test-token'):
+                req = Request(f'http://127.0.0.1:{server.server_port}/v1/voice/chunk?id={stream_id}'
+                              f'&agent_id=http-test-phone-id&offset={offset}', body,
+                              {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream'})
+                try:
+                    with urlopen(req, timeout=5) as response: return response.status, json.load(response)
+                except HTTPError as response: return response.code, json.load(response)
+            half = struct.pack('<h', 0) * 8000
+            self.assertEqual(chunk(0, half, 'wrong')[0], 401)
+            self.assertEqual(chunk(0, half)[1]['received'], 16000)
+            self.assertEqual(chunk('x', half)[0], 400)
+            self.assertEqual(chunk(16000, half)[1]['received'], 32000)
+            request('/v1/voice/stop', {'id': stream_id})
+            finish = dict(id=stream_id, agent_id='http-test-phone-id', total=40000)
+            self.assertEqual(request('/v1/voice/finish', finish)[0], 409)
+            finish['total'] = 32000
+            code, value = request('/v1/voice/finish', finish)
+            self.assertEqual((code, value['text']), (200, 'CapsWriter'))
         finally:
             server.shutdown(); server.server_close(); thread.join()
 
