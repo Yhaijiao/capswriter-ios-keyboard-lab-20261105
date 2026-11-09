@@ -203,7 +203,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         changingPage = false
         let index = max(0, min(2, Int((pager.contentOffset.x / pageWidth).rounded())))
         guard index != 1 else { modeSelector?.selectedSegmentIndex = mode.rawValue; return }
-        let next = Mode(rawValue: (mode.rawValue + (index == 2 ? 1 : 2)) % 3) ?? .voice
+        let next = pageMode(offset: index == 2 ? 1 : 2)
         if mode == .pinyin && next != .pinyin { commitComposition() }
         if mode == .voice && next != .voice && ["pending", "recording"].contains(voiceState) { cancelVoice() }
         mode = next; shifted = false; symbols = false; extraSymbols = false; render()
@@ -238,6 +238,13 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         if equal { result.distribution = .fillEqually }
         return result
     }
+    /// The page `offset` steps to the right. While the hotword editor is open
+    /// there is no voice page, so swiping just flips between EN and 拼.
+    private func pageMode(offset: Int) -> Mode {
+        let next = Mode(rawValue: (mode.rawValue + offset) % 3) ?? .voice
+        guard hotEditor != nil, next == .voice else { return next }
+        return mode == .pinyin ? .english : .pinyin
+    }
     private func render() {
         stopDeleting()
         removeVoiceIntentControl()
@@ -246,7 +253,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         centeringPages = true
         for item in pageStrip.arrangedSubviews { pageStrip.removeArrangedSubview(item); item.removeFromSuperview() }
         for (index, delta) in [2, 0, 1].enumerated() {
-            let pageMode = Mode(rawValue: (mode.rawValue + delta) % 3) ?? .voice
+            let pageMode = self.pageMode(offset: delta)
             let page = UIStackView(); page.axis = .vertical; page.spacing = 8
             page.isUserInteractionEnabled = index == 1; page.accessibilityElementsHidden = index != 1
             page.addArrangedSubview(UIView())
@@ -1091,7 +1098,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         candidatesExpanded = expanded && mode == .pinyin && !composition.isEmpty
         candidateGrid.isHidden = !candidatesExpanded
         pageStrip.isHidden = candidatesExpanded
-        pager.isScrollEnabled = !candidatesExpanded && hotEditor == nil
+        pager.isScrollEnabled = !candidatesExpanded
         pager.accessibilityElementsHidden = candidatesExpanded
         expandCandidatesButton?.configuration?.image = UIImage(systemName: candidatesExpanded ? "chevron.up" : "chevron.down")
         expandCandidatesButton?.accessibilityLabel = candidatesExpanded ? "收起候选词" : "展开全部候选词"
