@@ -108,10 +108,15 @@ final class HotwordManagerView: UIView {
         edit.isEnabled = file.writable
         edit.configuration?.title = file.writable ? "编辑整个文件" : "当前文件只读"
         insert.isEnabled = file.writable
-        insert.configuration?.title = file.writable ? "插入热词到 " + file.name : "当前文件只读，不能插入"
-        let readOnly = file.id == "hot" ? "电脑端还没打开手机写回：在电脑上先双击「停止语音桥接」，再双击「后台启动语音桥接」。" : "此文件只读。个人词条可在 hot.txt 中添加。"
+        let kind = ["rule": "替换规则", "aliases": "别名"][file.id] ?? "热词"
+        insert.configuration?.title = file.writable ? "插入\(kind)到 " + file.name : "当前文件只读，不能插入"
+        let personal = ["hot", "rule", "aliases"].contains(file.id)
+        let readOnly = personal ? "电脑端还没打开这份文件的手机写回：在电脑上先双击「停止语音桥接」，再双击「后台启动语音桥接」。"
+            : "此文件只读。可在 hot.txt、hot-rule.txt 或别名文件中添加。"
         let count = "共 \(HotwordAppend.entryCount(file.text)) 条。"
-        note.text = message ?? (file.writable ? count + "点下方按钮输入新热词，插入后下次识别生效。" : readOnly)
+        let usage = ["rule": "听错固定的词时用，格式「错 = 对」，一定替换。",
+                     "aliases": "格式「正确 | 听错的说法」。"][file.id] ?? "插入后下次识别生效。"
+        note.text = message ?? (file.writable ? count + usage : readOnly)
     }
 
     func showLoading() {

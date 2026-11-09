@@ -42,11 +42,25 @@ class HotwordTests(unittest.TestCase):
         self.assert_error(403, lambda: store.save('hot', self.hot()['revision'], '变化'))
 
     def test_other_files_and_paths_never_writable(self):
-        for name in ['aliases', 'auto', 'rule', 'asr', '../hot', 'C:/other']:
+        for name in ['auto', 'asr', '../hot', 'C:/other']:
             self.assert_error(403, lambda: self.store.save(name, self.hot()['revision'], '变化'))
 
+    def test_rules_and_aliases_are_writable_with_their_own_backup(self):
+        (self.source / 'hot-rule.txt').write_text('毫安时 = mAh\n', encoding='utf-8')
+        seen = []
+        self.store.validate = lambda text, file_id: seen.append(file_id)
+        files = {f['id']: f for f in self.store.read()['hotword_files']}
+        self.assertTrue(files['rule']['writable'] and files['aliases']['writable'])
+        self.assertFalse(files['auto']['writable'] or files['asr']['writable'])
+        self.store.save('rule', files['rule']['revision'], '毫安时 = mAh\n赛基 = SayKey\n')
+        self.store.save('aliases', files['aliases']['revision'], 'SayKey | 赛奇\n')
+        self.assertEqual(seen, ['rule', 'aliases'])
+        self.assertEqual((self.source / 'hot-rule.txt').read_text(encoding='utf-8'), '毫安时 = mAh\n赛基 = SayKey\n')
+        self.assertEqual((self.source / 'hot-personal-aliases.txt').read_text(encoding='utf-8'), 'SayKey | 赛奇\n')
+        self.assertEqual(next(self.state.glob('rule.*.txt')).read_text(encoding='utf-8'), '毫安时 = mAh\n')
+
     def test_validation_failure_preserves_original(self):
-        def invalid(_): raise ValueError('bad format')
+        def invalid(*_): raise ValueError('bad format')
         self.store.validate = invalid
         before = self.hot()
         self.assert_error(400, lambda: self.store.save('hot', before['revision'], '非法格式'))
@@ -54,7 +68,7 @@ class HotwordTests(unittest.TestCase):
         self.assertFalse(self.state.exists())
 
     def test_edit_during_validation_is_detected(self):
-        self.store.validate = lambda _: (self.source / 'hot.txt').write_text('另一处更新', encoding='utf-8')
+        self.store.validate = lambda *_: (self.source / 'hot.txt').write_text('另一处更新', encoding='utf-8')
         self.assert_error(409, lambda: self.store.save('hot', self.hot()['revision'], '旧副本'))
         self.assertEqual(self.hot()['text'], '另一处更新')
 

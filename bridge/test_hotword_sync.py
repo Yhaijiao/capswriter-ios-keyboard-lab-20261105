@@ -135,7 +135,7 @@ class HotwordSyncTests(unittest.TestCase):
 
     def test_local_concurrent_edit_during_pull_is_preserved(self):
         self.baseline(); self.remote.raw = '手机编辑\n'.encode()
-        self.sync.local_store.validate = lambda _: self.file.write_text('电脑刚编辑\n', encoding='utf-8')
+        self.sync.local_store.validate = lambda *_: self.file.write_text('电脑刚编辑\n', encoding='utf-8')
         self.assertEqual(self.sync.step(), 'conflict')
         self.assertEqual(self.file.read_text(encoding='utf-8'), '电脑刚编辑\n')
 

@@ -177,9 +177,9 @@ class DesktopEngine:
             text = self.rule.substitute(text)
             return EngineResult(text, self.version, self.source_version, self.mode, self.terms)
 
-    def validate_hotwords(self, text):
+    def validate_hotwords(self, text, file_id='hot'):
         snapshot = read_snapshot(self.root)
-        snapshot[HOT_FILES['hot']] = text
+        snapshot[HOT_FILES[file_id]] = text
         candidate = DesktopEngine(self.root, snapshot=snapshot)
         try: return candidate.terms
         finally: self._remove_namespace(candidate._package_name)
