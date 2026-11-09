@@ -5,6 +5,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        HostAppReturn.shared.start()
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.rootViewController = UINavigationController(rootViewController: LabViewController())
         window.overrideUserInterfaceStyle = .light
@@ -207,19 +208,24 @@ final class LabViewController: UIViewController, UITextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
             if self?.navigationItem.prompt == shown { self?.navigationItem.prompt = nil }
         }
-        if let bundleID = bundleID { returnWhenSessionIsUp(to: bundleID, attempts: 50) }
+        returnWhenSessionIsUp(reported: bundleID, attempts: 100)
     }
 
     /// Once the microphone is on, go back to the app the keyboard was in.
-    private func returnWhenSessionIsUp(to bundleID: String, attempts: Int) {
+    /// The host may be learned a moment after launch, so keep asking until then.
+    private func returnWhenSessionIsUp(reported: String?, attempts: Int) {
         guard attempts > 0, UIApplication.shared.applicationState == .active else { return }
-        guard voice.active else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.returnWhenSessionIsUp(to: bundleID, attempts: attempts - 1)
+        guard voice.active, let host = HostAppReturn.shared.host(reported: reported) else {
+            let gaveUp = attempts == 1
+            if gaveUp, voice.active {
+                navigationItem.prompt = "语音会话已续上 · 请点左上角「◀」返回，键盘会自动录音"
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.returnWhenSessionIsUp(reported: reported, attempts: attempts - 1)
             }
             return
         }
-        if !Self.openApplication(bundleID) {
+        if !HostAppReturn.shared.open(host) && !Self.openApplication(host) {
             navigationItem.prompt = "语音会话已续上 · 请点左上角「◀」返回，键盘会自动录音"
         }
     }

@@ -493,6 +493,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         }
         // Lab extends its session each time a recording starts, so a live
         // session always has room. Only a lapsed one needs a trip to Lab.
+        // Known to be off: go straight to Lab, no waiting.
+        if voiceAgentReady == false && canOpenContainingApp { renewSessionInLab(); return }
         guard voiceAgentReady == true else { checkSessionThenRecord(pairing); return }
         startRecording(pairing)
     }
@@ -644,7 +646,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func updateVoiceIntentControl() {
         let showIntent = canUseVoiceIntent && voiceID == nil && voiceState == "idle"
-            && (voiceAgentReady != true || intentWarmupID != nil)
+            && (voiceAgentReady != true || intentWarmupID != nil) && !canOpenContainingApp
         guard showIntent, let container = voiceContainer else { removeVoiceIntentControl(); return }
         if #available(iOS 18.0, *) {
             let control = KeyboardVoiceIntentControl(isEnabled: !voiceBusy) { [weak self] in self?.beginIntentWarmup() }
