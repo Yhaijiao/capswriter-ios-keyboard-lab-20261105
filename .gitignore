@@ -11,3 +11,4 @@ __pycache__/
 *.key
 *.ipa
 *.log
+bridge/speech-cleanup.txt
