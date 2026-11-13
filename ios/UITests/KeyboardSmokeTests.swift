@@ -44,14 +44,17 @@ final class KeyboardSmokeTests: XCTestCase {
         }
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20), app.debugDescription)
         dismissSystemTypingIntroduction(in: app, wait: true)
+        // The keyboard opens on its English page; the hide button in the top
+        // bar tells it apart from the system keyboard.
         let testButton = app.buttons["keyboard-voice-button"]
+        let marker = app.buttons["keyboard-hide"]
         for _ in 0..<6 {
-            if testButton.exists { break }
+            if marker.exists { break }
             dismissSystemTypingIntroduction(in: app, wait: false)
             let next = app.buttons["Next keyboard"].firstMatch
             if next.waitForExistence(timeout: 5) {
                 next.tap()
-                if testButton.waitForExistence(timeout: 30) { break }
+                if marker.waitForExistence(timeout: 30) { break }
             }
             // On a cold shared runner, UIKit may take >40s to launch the
             // extension and its first host connection can expire. Refocus the
@@ -59,26 +62,34 @@ final class KeyboardSmokeTests: XCTestCase {
             if !app.keyboards.firstMatch.exists {
                 attach(app, name: "Cold extension connection retry")
                 editor.tap()
-                if testButton.waitForExistence(timeout: 15) { break }
+                if marker.waitForExistence(timeout: 15) { break }
             }
         }
-        XCTAssertTrue(testButton.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(marker.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5), "English is the first page")
+        XCTAssertTrue(app.buttons["keyboard-header-mic"].exists, "Letter pages can start voice input")
         let pageBounds = app.scrollViews["keyboard-pages"].frame
         XCTAssertLessThanOrEqual(pageBounds.height, 216, "Normal compact body must not retain the extra footer row")
-        XCTAssertGreaterThanOrEqual(testButton.frame.minY, pageBounds.minY)
-        XCTAssertLessThanOrEqual(testButton.frame.maxY, pageBounds.maxY)
         app.buttons["keyboard-return"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\n"))
         let voiceReturnBottom = app.buttons["keyboard-return"].frame.maxY
 
         let selector = app.segmentedControls["keyboard-mode-selector"]
-        app.scrollViews["keyboard-pages"].swipeLeft()
-        XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
         let englishTop = app.buttons["key-q"].frame.minY
-        XCTAssertEqual(app.buttons["keyboard-return"].frame.maxY, voiceReturnBottom, accuracy: 1)
         for letter in "hello" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello"))
+        // One tap on shift capitalizes exactly one letter.
+        app.buttons["keyboard-shift"].tap()
+        app.buttons["key-H"].tap()
+        app.buttons["key-i"].tap()
+        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("helloHi"))
         attach(app, name: "English keyboard")
+
+        app.scrollViews["keyboard-pages"].swipeLeft()
+        XCTAssertTrue(testButton.waitForExistence(timeout: 5), "Voice is the second page")
+        XCTAssertGreaterThanOrEqual(testButton.frame.minY, pageBounds.minY)
+        XCTAssertLessThanOrEqual(testButton.frame.maxY, pageBounds.maxY)
+        XCTAssertEqual(app.buttons["keyboard-return"].frame.maxY, voiceReturnBottom, accuracy: 1)
 
         app.scrollViews["keyboard-pages"].swipeLeft()
         waitForMode("拼", in: selector)
@@ -123,18 +134,21 @@ final class KeyboardSmokeTests: XCTestCase {
             mixed.tap()
             XCTAssertTrue((editor.value as? String ?? "").hasSuffix(text))
         }
+        // Return keeps the typed pinyin letters as English.
+        for letter in "ok" { app.buttons["key-" + String(letter)].tap() }
+        app.buttons["keyboard-return"].tap()
+        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("我们现在ok"))
         attach(app, name: "Chinese pinyin keyboard")
         app.scrollViews["keyboard-pages"].swipeLeft()
-        XCTAssertTrue(testButton.waitForExistence(timeout: 5))
-        attach(app, name: "Voice test keyboard")
+        waitForMode("EN", in: selector)
         app.scrollViews["keyboard-pages"].swipeRight()
         waitForMode("拼", in: selector)
         app.scrollViews["keyboard-pages"].swipeRight()
-        XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
-        app.scrollViews["keyboard-pages"].swipeRight()
         XCTAssertTrue(testButton.waitForExistence(timeout: 5))
+        attach(app, name: "Voice test keyboard")
         // Direct mode selection uses the same sliding transition.
         selector.buttons["EN"].tap()
+        waitForMode("EN", in: selector)
         XCTAssertTrue(app.buttons["key-h"].waitForExistence(timeout: 5))
         for _ in 0..<30 { app.buttons["key-a"].tap() }
         let before = (editor.value as? String ?? "").count
@@ -145,6 +159,16 @@ final class KeyboardSmokeTests: XCTestCase {
         XCTAssertLessThan(afterHold.count, before - 3)
         Thread.sleep(forTimeInterval: 0.35)
         XCTAssertEqual(editor.value as? String ?? "", afterHold, "Deletion must stop on release")
+        // Line delete removes what was typed on the current line only.
+        app.buttons["keyboard-return"].tap()
+        for letter in "line" { app.buttons["key-" + String(letter)].tap() }
+        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("\nline"))
+        app.buttons["keyboard-delete-line"].tap()
+        XCTAssertEqual(editor.value as? String ?? "", afterHold + "\n")
+        // The hide button takes the whole keyboard off the screen.
+        marker.tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: marker)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed)
     }
 
     private func waitForMode(_ name: String, in selector: XCUIElement) {
