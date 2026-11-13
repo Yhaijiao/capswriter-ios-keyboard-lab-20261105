@@ -78,11 +78,17 @@ final class KeyboardSmokeTests: XCTestCase {
         let englishTop = app.buttons["key-q"].frame.minY
         for letter in "hello" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello"))
+        // Finishing a word offers likely next words; tapping one inserts it.
+        app.buttons["keyboard-space"].tap()
+        let nextWord = app.buttons["suggestion-all"]
+        XCTAssertTrue(nextWord.waitForExistence(timeout: 10), "hello is followed by a suggestion bar")
+        nextWord.tap()
+        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello all "))
         // One tap on shift capitalizes exactly one letter.
         app.buttons["keyboard-shift"].tap()
         app.buttons["key-H"].tap()
         app.buttons["key-i"].tap()
-        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("helloHi"))
+        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello all Hi"))
         attach(app, name: "English keyboard")
 
         app.scrollViews["keyboard-pages"].swipeLeft()

@@ -108,6 +108,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private var deleteStarted = Date.distantPast
     private weak var deleteGesture: UILongPressGestureRecognizer?
     private var deletingLines = false
+    private var suggester: WordSuggestions?
+    private var suggesterLoading = false
+    private let suggestionScroll = KeyboardPagingScrollView()
+    private let suggestionRow = UIStackView()
+    private var suggestions: [WordSuggestion] = []
+    private var suggestionRefreshPending = false
+    /// The last insert was a tapped suggestion that added its own space.
+    private var suggestionSpace = false
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -132,6 +140,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         refreshBridgePairing()
         updatePreferredHeight()
         insertVoiceResultIfReady()
+        scheduleSuggestions()
         if voiceID != nil && ["stopping", "processing"].contains(voiceState) { scheduleVoicePoll() }
         updateVoice(); startVoiceReadiness()
         resumeAfterRenewalIfNeeded()
@@ -152,6 +161,11 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         ])
         render()
     }
+    override func textDidChange(_ textInput: UITextInput?) {
+        super.textDidChange(textInput)
+        // The cursor moved or the host changed the text: suggest for the new place.
+        scheduleSuggestions()
+    }
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         if appeared { updatePreferredHeight() }
@@ -169,8 +183,9 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         showsSwitchFooter = appeared && extensionContext != nil && needsInputModeSwitchKey
         switchFooter?.isHidden = !showsSwitchFooter
         globe?.isHidden = !showsSwitchFooter
-        let composing = mode == .pinyin && !composition.isEmpty
-        let height: CGFloat = 272 + (composing ? 24 : 0) + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
+        // The letter pages are taller by the suggestion bar. While pinyin is
+        // being typed its candidates use that room, so the height stays put.
+        let height: CGFloat = 272 + (mode == .voice ? 0 : 38) + (showsSwitchFooter ? 52 : 0) + (hotEditor == nil ? 0 : 144)
         if heightConstraint?.constant != height {
             heightConstraint?.constant = height
             view.invalidateIntrinsicContentSize(); view.setNeedsLayout()
@@ -389,6 +404,25 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         candidateHeight.priority = .defaultHigh; candidateHeight.isActive = true
         candidateHeader.isHidden = true; pinyinHeader = candidateHeader
         content.addArrangedSubview(candidateHeader)
+        suggestionScroll.showsHorizontalScrollIndicator = false
+        suggestionScroll.delaysContentTouches = false
+        suggestionScroll.accessibilityIdentifier = "suggestion-bar"
+        suggestionRow.axis = .horizontal; suggestionRow.spacing = 6
+        suggestionRow.translatesAutoresizingMaskIntoConstraints = false; suggestionScroll.addSubview(suggestionRow)
+        // Below the header's priority: when the host squeezes the keyboard,
+        // the bar gives up its room before any key does.
+        let suggestionHeight = suggestionScroll.heightAnchor.constraint(equalToConstant: 30)
+        suggestionHeight.priority = UILayoutPriority(700)
+        NSLayoutConstraint.activate([
+            suggestionRow.topAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.topAnchor),
+            suggestionRow.bottomAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.bottomAnchor),
+            suggestionRow.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor),
+            suggestionRow.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor),
+            suggestionRow.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor),
+            suggestionHeight
+        ])
+        suggestionScroll.isHidden = true
+        content.addArrangedSubview(suggestionScroll)
         pager.delegate = self; pager.isPagingEnabled = true; pager.bounces = false
         pager.alwaysBounceVertical = false; pager.showsVerticalScrollIndicator = false
         pager.showsHorizontalScrollIndicator = false; pager.isDirectionalLockEnabled = true
@@ -858,6 +892,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         commitComposition()
         let inserted = autoNewline.apply(to: delivery.text)
         textDocumentProxy.insertText(inserted)
+        scheduleSuggestions()
         voiceUndo.record(inserted, documentID: documentID)
         resetVoice("已上屏 · 不满意可点上方撤回")
         BridgeClient.call(pairing: pairing, path: "/v1/voice/consume", value: ["id": delivery.id]) { _ in }
@@ -1065,6 +1100,12 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     private func input(_ text: String) {
         guard !hotSaving else { return }
         lastSpaceAt = .distantPast; spaceCommittedComposition = false
+        // Like the iPhone keyboard: punctuation typed right after a tapped
+        // suggestion takes the place of the space that suggestion added.
+        if suggestionSpace && text.count == 1 && ".,?!;:".contains(text) && editingContext().hasSuffix(" ") {
+            deleteCharacter()
+        }
+        suggestionSpace = false
         if mode == .pinyin && !symbols && text.count == 1 && text.allSatisfy({ $0 >= "a" && $0 <= "z" }) {
             guard composition.count < 64 else { return }; composition += text; updateCandidates()
         } else {
@@ -1076,16 +1117,14 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     private func space() {
         guard !hotSaving else { return }
+        suggestionSpace = false
         if composition.isEmpty {
             if spaceCommittedComposition && Date().timeIntervalSince(lastSpaceAt) < 0.4 {
                 insertText(mode == .pinyin ? "。" : ". ")
                 lastSpaceAt = .distantPast; spaceCommittedComposition = false; return
             }
             spaceCommittedComposition = false
-            let context: String
-            if let editor = hotEditor {
-                context = String((editor.text as NSString).substring(to: min(editor.selectedRange.location, (editor.text as NSString).length)))
-            } else { context = textDocumentProxy.documentContextBeforeInput ?? "" }
+            let context = editingContext()
             let preceding = context.dropLast().last
             if Date().timeIntervalSince(lastSpaceAt) < 0.4, context.hasSuffix(" "),
                let preceding = preceding, preceding.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
@@ -1094,12 +1133,80 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
             } else { insertText(" "); lastSpaceAt = Date() }
         } else { commitComposition(); lastSpaceAt = Date(); spaceCommittedComposition = true }
     }
+    /// The text before the cursor, in the hotword editor or the host's field.
+    private func editingContext() -> String {
+        guard let editor = hotEditor else { return textDocumentProxy.documentContextBeforeInput ?? "" }
+        let text = editor.text as NSString
+        return text.substring(to: min(editor.selectedRange.location, text.length))
+    }
+    /// Refreshes the bar once the current key press is fully handled, so the
+    /// host has reported the text as it now stands.
+    private func scheduleSuggestions() {
+        guard !suggestionRefreshPending else { return }
+        suggestionRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.suggestionRefreshPending = false; self?.refreshSuggestions()
+        }
+    }
+    private func refreshSuggestions() {
+        // Typing a pinyin letter withdraws the suggestions: the candidate
+        // line takes over until that word is committed.
+        let composing = mode == .pinyin && !composition.isEmpty
+        let visible = mode != .voice && !composing
+        suggestionScroll.isHidden = !visible
+        guard visible, voiceID == nil else { showSuggestions([]); return }
+        guard let suggester = suggester else { loadSuggester(); showSuggestions([]); return }
+        showSuggestions(suggester.suggestions(before: editingContext(),
+                                              language: mode == .pinyin ? .chinese : .english))
+    }
+    private func loadSuggester() {
+        guard !suggesterLoading else { return }
+        suggesterLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loaded = WordSuggestions.bundled()
+            DispatchQueue.main.async { [weak self] in
+                self?.suggester = loaded; self?.refreshSuggestions()
+            }
+        }
+    }
+    private func showSuggestions(_ next: [WordSuggestion]) {
+        guard next != suggestions || suggestionRow.arrangedSubviews.count != next.count else { return }
+        suggestions = next
+        for view in suggestionRow.arrangedSubviews { suggestionRow.removeArrangedSubview(view); view.removeFromSuperview() }
+        let font = UIFont.systemFont(ofSize: 16)
+        for suggestion in next {
+            let button = candidateButton(grid: false) { [weak self] in self?.chooseSuggestion(suggestion) }
+            button.setTitle(suggestion.text, for: .normal)
+            button.titleLabel?.font = font
+            button.layer.cornerRadius = 15
+            button.accessibilityIdentifier = "suggestion-" + suggestion.text
+            let width = ceil((suggestion.text as NSString).size(withAttributes: [.font: font]).width) + 22
+            button.widthAnchor.constraint(equalToConstant: max(40, width)).isActive = true
+            suggestionRow.addArrangedSubview(button)
+        }
+        suggestionScroll.setContentOffset(.zero, animated: false)
+    }
+    private func chooseSuggestion(_ suggestion: WordSuggestion) {
+        guard !hotSaving, composition.isEmpty, suggestions.contains(suggestion) else { return }
+        // Replacing a half-typed word deletes text, so make sure the field
+        // still ends with what the suggestion was made for.
+        if suggestion.replacing > 0 {
+            let current = suggester?.suggestions(before: editingContext(), language: .english) ?? []
+            guard current.contains(suggestion) else { scheduleSuggestions(); return }
+        }
+        lastSpaceAt = .distantPast; spaceCommittedComposition = false
+        for _ in 0..<suggestion.replacing { deleteCharacter() }
+        insertText(suggestion.insertion)
+        suggestionSpace = suggestion.insertion.hasSuffix(" ")
+        if mode == .english && !symbols && shiftState == .once { shiftState = .off; render() }
+    }
     private func clearVoiceUndo() {
         guard voiceUndo.isAvailable else { return }
         voiceUndo.clear(); updateVoiceEditKeys()
     }
     private func deleteCharacter() {
         guard !hotSaving else { return }
+        suggestionSpace = false; scheduleSuggestions()
         clearInlineDraft()
         spaceCommittedComposition = false
         if composition.isEmpty {
@@ -1122,6 +1229,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     /// Removes the text before the cursor back to the previous line break.
     private func deleteLine() {
         guard !hotSaving else { return }
+        suggestionSpace = false; scheduleSuggestions()
         clearInlineDraft()
         spaceCommittedComposition = false; lastSpaceAt = .distantPast
         guard composition.isEmpty else { composition = ""; updateCandidates(); return }
@@ -1230,6 +1338,8 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         updatePreferredHeight()
         if !composing { setCandidatesExpanded(false) }
         compositionLabel?.text = composition
+        suggestionScroll.isHidden = mode == .voice || composing
+        scheduleSuggestions()
         // A dedicated full-width line preserves the beginning of the spelling.
         // Users can scroll this line to inspect a spelling wider than the screen.
         compositionViewport.setContentOffset(.zero, animated: false)
@@ -1357,6 +1467,7 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
         guard !hotSaving else { return }
         clearInlineDraft()
         clearVoiceUndo()
+        scheduleSuggestions()
         guard let editor = hotEditor else { textDocumentProxy.insertText(text); return }
         let length = (editor.text as NSString).length
         let selected = editor.selectedRange

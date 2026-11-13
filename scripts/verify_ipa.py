@@ -54,7 +54,11 @@ def verify(path, expected_version=None):
                     assert '我们' in syllables["wo'men"]
                     assert '你好吗' in syllables["ni'hao'ma"]
                     assert sum(map(len, syllables.values())) == sum(map(len, lexicon.values()))
-                assert b'MIT License' in package.read(bundle + 'ThirdPartyNotices.txt')
+                notices = package.read(bundle + 'ThirdPartyNotices.txt')
+                assert b'MIT License' in notices
+                for name in ('suggest-zh.txt', 'suggest-en.txt', 'suggest-en-words.txt'):
+                    assert len(package.read(bundle + name)) > 50000, name
+                assert b'creativecommons.org/licenses/by/3.0' in notices and b'SCOWL' in notices
         forbidden = ('hot-personal', 'hot-auto', 'hosts.yml', '.env', 'private/')
         assert not any(any(part in name for part in forbidden) for name in package.namelist())
     return {'package': str(path), 'app': app['CFBundleIdentifier'],
