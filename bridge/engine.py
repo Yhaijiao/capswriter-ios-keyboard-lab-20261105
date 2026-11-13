@@ -90,8 +90,9 @@ class EngineResult:
 class DesktopEngine:
     mode = 'desktop-shared-hotword-source'
 
-    def __init__(self, root, *, snapshot=None):
+    def __init__(self, root, *, snapshot=None, cleaner=None):
         self.root = Path(root)
+        self.cleaner = cleaner
         self.lock = threading.RLock()
         self.fingerprint = None
         self._package_name = None
@@ -170,6 +171,8 @@ class DesktopEngine:
     def correct(self, text):
         with self.lock:
             self.refresh()
+            # Drop fillers and stutters first so hotwords and punctuation see clean text.
+            if self.cleaner: text = self.cleaner.clean(text)
             result = self.correct_hotwords(self.state, text, k=10)
             text = result.text if self.settings['hot'] else text
             text = self.strip_punc(text)
@@ -189,7 +192,8 @@ class DesktopEngine:
             self.refresh()
             return dict(version=self.version, source_version=self.source_version,
                         mode=self.mode, terms=self.terms, engine='installed desktop hotword and rule source',
-                        scope='ASR output -> hotword -> punctuation (neutral app context) -> rules; no ASR/LLM',
+                        scope='ASR output -> filler cleanup -> hotword -> punctuation (neutral app context) -> rules; no ASR/LLM',
+                        cleanup=self.cleaner.status() if self.cleaner else dict(enabled=False, file=''),
                         app_context='neutral; desktop per-app punctuation settings may differ')
 
 
@@ -198,8 +202,10 @@ class DemoEngine:
     version = digest({'CapsWriter': ['卡普斯赖特'], 'iPhone': ['爱疯手机']})
     source_version = 'demo-1'
     terms = 2
+    cleaner = None
 
     def correct(self, text):
+        if self.cleaner: text = self.cleaner.clean(text)
         for old, new in [('卡普斯赖特', 'CapsWriter'), ('爱疯手机', 'iPhone')]:
             text = text.replace(old, new)
         return EngineResult(text, self.version, self.source_version, self.mode, self.terms,
