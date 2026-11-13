@@ -79,8 +79,12 @@ final class KeyboardSmokeTests: XCTestCase {
         for letter in "hello" { app.buttons["key-" + String(letter)].tap() }
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("hello"))
         // One tap on shift capitalizes exactly one letter.
+        // The page is rebuilt after shift changes; wait for the new keys the
+        // same way the page swipes below do.
         app.buttons["keyboard-shift"].tap()
+        XCTAssertTrue(app.buttons["key-H"].waitForExistence(timeout: 15), app.debugDescription)
         app.buttons["key-H"].tap()
+        XCTAssertTrue(app.buttons["key-i"].waitForExistence(timeout: 15), "Shift turns off after one letter")
         app.buttons["key-i"].tap()
         XCTAssertTrue((editor.value as? String ?? "").hasSuffix("helloHi"))
         attach(app, name: "English keyboard")
