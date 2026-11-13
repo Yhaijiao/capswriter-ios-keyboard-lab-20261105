@@ -1135,7 +1135,10 @@ final class KeyboardViewController: UIInputViewController, UIScrollViewDelegate 
     }
     /// The text before the cursor, in the hotword editor or the host's field.
     private func editingContext() -> String {
-        guard let editor = hotEditor else { return textDocumentProxy.documentContextBeforeInput ?? "" }
+        guard let editor = hotEditor else {
+            // Hosted outside a keyboard extension (layout tests) there is no field.
+            return extensionContext == nil ? "" : (textDocumentProxy.documentContextBeforeInput ?? "")
+        }
         let text = editor.text as NSString
         return text.substring(to: min(editor.selectedRange.location, text.length))
     }
