@@ -199,7 +199,7 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(label.convert(label.bounds, to: root).maxX, candidateArea.convert(candidateArea.bounds, to: root).minX)
         XCTAssertGreaterThan(candidateArea.bounds.width, 100)
         let barBottom = visibleButton("keyboard-hide", in: root).convert(CGRect(x: 0, y: 0, width: 1, height: 30), to: root).maxY
-        XCTAssertNotNil(visibleButton("keyboard-header-mic", in: root), "The button bar stays while pinyin is typed")
+        XCTAssertTrue(isVisible("keyboard-mode-selector", in: root), "The button bar stays while pinyin is typed")
         XCTAssertGreaterThanOrEqual(candidateLine.convert(candidateLine.bounds, to: root).minY, barBottom - 1)
         for _ in spelling { visibleButton("keyboard-delete", in: root).sendActions(for: .primaryActionTriggered) }
         for letter in "nihao" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
