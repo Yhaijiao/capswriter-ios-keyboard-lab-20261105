@@ -42,12 +42,21 @@ final class KeyboardLayoutTests: XCTestCase {
         let views = descendants(root)
         let pager = views.first { $0.accessibilityIdentifier == "keyboard-pages" } as! UIScrollView
         XCTAssertEqual(pager.contentSize.width, pager.bounds.width * 3, accuracy: 1)
-        XCTAssertEqual(pager.contentOffset.x, pager.bounds.width, accuracy: 1, "Initial page must be the center voice page")
+        XCTAssertEqual(pager.contentOffset.x, pager.bounds.width, accuracy: 1, "The current page is always the center one")
+        let selector = views.first { $0.accessibilityIdentifier == "keyboard-mode-selector" } as! UISegmentedControl
+        XCTAssertEqual(selector.titleForSegment(at: selector.selectedSegmentIndex), "EN", "The keyboard opens on English")
+        for identifier in ["keyboard-header-mic", "keyboard-hide", "keyboard-mode-selector"] {
+            let control = views.first { $0.accessibilityIdentifier == identifier }!
+            let frame = control.convert(control.bounds, to: root)
+            XCTAssertFalse(control.isHidden, identifier)
+            XCTAssertGreaterThan(frame.width, 20, identifier)
+            XCTAssertGreaterThanOrEqual(frame.minX, 0, identifier)
+            XCTAssertLessThanOrEqual(frame.maxX, root.bounds.width, identifier)
+        }
+        // The voice page is a side page now; it stays centered within its page.
         let mic = views.first { $0.accessibilityIdentifier == "keyboard-voice-button" }!
         let micFrame = mic.convert(mic.bounds, to: root)
-        XCTAssertEqual(micFrame.midX, root.bounds.midX, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(micFrame.minX, 0)
-        XCTAssertLessThanOrEqual(micFrame.maxX, root.bounds.width)
+        XCTAssertEqual((micFrame.midX - root.bounds.midX).remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         // Reproduce the cold extension's size negotiation, not only a detached
         // screenshot at one fixed size. No page may scroll vertically.
         for height in [CGFloat(272), 380, 272] {
@@ -71,8 +80,19 @@ final class KeyboardLayoutTests: XCTestCase {
         let voiceReturns = returns.filter { $0.bounds.width > 100 }
         XCTAssertEqual(voiceReturns.count, 1)
         if let voiceReturn = voiceReturns.first {
-            XCTAssertEqual(voiceReturn.convert(voiceReturn.bounds, to: root).midX, root.bounds.midX, accuracy: 1)
+            let offset = voiceReturn.convert(voiceReturn.bounds, to: root).midX - root.bounds.midX
+            XCTAssertEqual(offset.remainder(dividingBy: pager.bounds.width), 0, accuracy: 1)
         }
+        // The line delete sits directly above the voice page's delete key.
+        let pageDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete" }
+        let lineDeletes = views.filter { $0.accessibilityIdentifier == "keyboard-delete-line" }
+        XCTAssertEqual(lineDeletes.count, 3, "Every page has a line delete")
+        if let voiceDelete = pageDeletes.first(where: { $0.bounds.width > 100 }) {
+            let deleteFrame = voiceDelete.convert(voiceDelete.bounds, to: root)
+            let above = lineDeletes.map { $0.convert($0.bounds, to: root) }.filter { $0.maxY <= deleteFrame.minY }
+            XCTAssertEqual(above.count, 1)
+            XCTAssertEqual(above.first?.maxX ?? 0, deleteFrame.maxX, accuracy: 1)
+        } else { XCTFail("Missing the voice page's delete key") }
         let firstTop = firstKeys[0].convert(firstKeys[0].bounds, to: root).minY
         XCTAssertGreaterThan(firstKeys[0].bounds.width, 0)
         XCTAssertEqual(firstKeys[1].convert(firstKeys[1].bounds, to: root).minY, firstTop, accuracy: 1)
@@ -87,6 +107,16 @@ final class KeyboardLayoutTests: XCTestCase {
         let attachment = XCTAttachment(image: image)
         attachment.name = "Fresh keyboard layout"; attachment.lifetime = .keepAlways
         add(attachment)
+        // Shift: one tap shows capitals. A second tap either locks them (quick)
+        // or turns them off (slow runner); the double-tap timing itself is
+        // covered by KeyboardEditingTests, so accept both here.
+        visibleButton("keyboard-shift", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertNotNil(visibleButton("key-Q", in: root))
+        visibleButton("keyboard-shift", in: root).sendActions(for: .primaryActionTriggered)
+        if isVisible("key-Q", in: root) {
+            visibleButton("keyboard-shift", in: root).sendActions(for: .primaryActionTriggered)
+        }
+        XCTAssertNotNil(visibleButton("key-q", in: root), "Shift always returns to lowercase")
     }
 
     @MainActor func testHotwordEditorUsesOwnTextAndUnicodeDelete() async {
@@ -225,6 +255,46 @@ final class KeyboardLayoutTests: XCTestCase {
         focusedAttachment.name = "Long pinyin primary and short alternatives"; focusedAttachment.lifetime = .keepAlways; add(focusedAttachment)
     }
 
+    @MainActor func testReturnKeepsLettersAndLineDeleteRemovesLines() {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let previousKeyWindow = scene?.windows.first { $0.isKeyWindow }
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: UIScreen.main.bounds)
+        let host = UIViewController(); host.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host; window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousKeyWindow?.makeKeyAndVisible() }
+        host.loadViewIfNeeded()
+        let controller = KeyboardViewController(); controller.loadViewIfNeeded()
+        host.addChild(controller)
+        let root = controller.view!; root.translatesAutoresizingMaskIntoConstraints = false
+        host.view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.topAnchor.constraint(equalTo: host.view.topAnchor),
+            root.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
+            root.heightAnchor.constraint(equalToConstant: 440)
+        ])
+        controller.didMove(toParent: host)
+        controller.showHotwordEditor(HotwordFile(id: "hot", name: "hot.txt", text: "第一行\n第二行", revision: "fixture", writable: true))
+        host.view.layoutIfNeeded(); root.layoutIfNeeded()
+        let editor = descendants(root).first { $0.accessibilityIdentifier == "hotword-editor-text" } as! UITextView
+        for letter in "abc" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        XCTAssertEqual(editor.text, "第一行\n第二行", "Typed pinyin letters stay in the composition")
+        visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "第一行\n第二行abc", "Return keeps the typed letters as English")
+        visibleButton("keyboard-return", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "第一行\n第二行abc\n", "Return is a line break when nothing is being typed")
+        let lineDelete = visibleButton("keyboard-delete-line", in: root)
+        lineDelete.sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "第一行\n", "The line and its own line break go together")
+        for letter in "xy" { visibleButton("key-" + String(letter), in: root).sendActions(for: .primaryActionTriggered) }
+        visibleButton("keyboard-delete-line", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "第一行\n", "Line delete first clears letters still being typed")
+        visibleButton("keyboard-delete-line", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "")
+        visibleButton("keyboard-delete-line", in: root).sendActions(for: .primaryActionTriggered)
+        XCTAssertEqual(editor.text, "", "Nothing left to delete")
+    }
+
     @MainActor func testHotwordBrowserRespectsWritableFileFlag() {
         let manager = HotwordManagerView(frame: CGRect(x: 0, y: 0, width: 430, height: 272))
         let files = [HotwordFile(id: "hot", name: "hot.txt", text: "CapsWriter", revision: "a", writable: true),
@@ -241,6 +311,18 @@ final class KeyboardLayoutTests: XCTestCase {
         let content = descendants(manager).first { $0.accessibilityIdentifier == "hotword-file-content" } as! UITextView
         XCTAssertEqual(content.text, "演示")
         XCTAssertFalse(content.isEditable)
+    }
+
+    @MainActor private func isVisible(_ identifier: String, in root: UIView) -> Bool {
+        descendants(root).contains { view in
+            guard view.accessibilityIdentifier == identifier else { return false }
+            var current: UIView? = view
+            while let item = current {
+                if item.isHidden || item.accessibilityElementsHidden { return false }
+                current = item.superview
+            }
+            return true
+        }
     }
 
     @MainActor private func visibleButton(_ identifier: String, in root: UIView) -> UIButton {
